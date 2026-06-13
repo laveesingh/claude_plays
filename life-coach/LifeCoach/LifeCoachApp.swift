@@ -12,7 +12,9 @@ struct LifeCoachApp: App {
         let store = AppStore()
         _store = StateObject(wrappedValue: store)
         _engine = StateObject(wrappedValue: CoachEngine(store: store))
+        NotificationDelegate.shared.store = store
         UNUserNotificationCenter.current().delegate = NotificationDelegate.shared
+        NotificationManager.registerCategories()
     }
 
     var body: some Scene {
@@ -25,11 +27,11 @@ struct LifeCoachApp: App {
     }
 }
 
-/// Lets any view switch tabs (e.g. "Check in" on Today jumps to the Coach tab).
+/// Lets any view switch tabs (e.g. "Morning brief" on Today jumps to Coach).
 final class Router: ObservableObject {
     @Published var selectedTab: Tab = .today
 
     enum Tab: Hashable {
-        case today, coach, goals, settings
+        case today, coach, progress, goals, settings
     }
 }

@@ -1,0 +1,79 @@
+# Coach — a Claude-powered life coach + personal assistant for iOS
+
+A SwiftUI app that simulates a full-time life coach merged with a personal assistant:
+it doesn't wait for you to message it. It interviews you, timeboxes your days around
+your real calendar, pings you block by block, verifies your fitness claims against
+HealthKit, critiques you with receipts, and reviews your week like it owns the
+outcome — because you hired it to.
+
+## The agent
+
+The coach is a Claude agent (`claude-opus-4-8`, streaming, adaptive thinking, with
+per-session reasoning effort) holding an 11-tool belt over real app and OS state:
+
+| Tool | What it controls |
+|---|---|
+| `timebox_day` | Writes your actual schedule: timed blocks with lock-screen check-ins armed for each |
+| `update_block` | Resolves a block's outcome (done / missed / negotiated skip) |
+| `set_habits` | Your standing daily/weekly habits, with adherence tracked over 14 days |
+| `update_goal` | Milestones with deadlines, weekly targets, % complete, progress notes |
+| `log_metric` | Measurements (weight, 5K time, deep-work hours) → trend charts |
+| `update_dossier` | Its private client file on you — schedule, baselines, failure patterns, wins |
+| `schedule_nudge` | One-off push notifications in its own voice |
+| `read_calendar` | Your real calendar (EventKit), so blocks never collide with meetings |
+| `read_health` | Verified HealthKit data: workouts, steps, sleep — it fact-checks you |
+| `save_weekly_report` | Written weekly report cards on your Progress screen |
+| `mark_intake_complete` | Graduates you from intake to full coaching |
+
+**Two-layer memory.** Recent chat is the working window; everything durable lives in
+the dossier the coach maintains itself — and you can read every word of it on the
+Progress screen ("What your coach knows about you").
+
+**Session protocols.** Each ritual runs a different playbook at a different effort:
+
+- **Intake interview** (high effort) — 8–12 questions, one at a time: schedule, baselines, injury history, past failures, what makes you quit. Builds the dossier, sets habits, breaks goals into deadlined milestones.
+- **Morning brief** — reads your calendar and last night's sleep, judges yesterday in one line, timeboxes today, arms check-ins.
+- **Midday correction** — when blocks go overdue unresolved, the Today screen flags it; the coach confronts the slip and replans the remaining hours.
+- **Evening debrief** — plan vs. record, block by block, fitness claims checked against HealthKit; logs metrics, updates the dossier, names tomorrow's priority.
+- **Weekly review** (high effort) — full 14-day audit, pattern analysis, milestone renegotiation (out loud, never silent), next week's targets, and a written report card.
+
+**The proactive loop (no server required).** iOS won't run an LLM continuously in the
+background, so the agent front-loads its presence: every `timebox_day` arms a
+pre-start reminder and an interactive end-of-block check-in per block. You answer
+**Done / Missed / Ask me in 15** straight from the lock screen; answers write into the
+record without opening the app, and the next session starts from that ground truth.
+Daily morning/evening pings and a Sunday weekly-review ping are standing.
+
+## Setup
+
+1. Open `LifeCoach.xcodeproj` in **Xcode 16+**. Sources are folder-synced — new files
+   in `LifeCoach/` are picked up automatically.
+2. Target → Signing & Capabilities: pick your team, change the bundle id
+   (`com.example.LifeCoach`). The HealthKit capability is already in the entitlements.
+3. Run on a **real device** (HealthKit and lock-screen actions need hardware). iOS 17+.
+4. Get an API key at [console.anthropic.com](https://console.anthropic.com) and paste
+   it during onboarding (or later in Settings). Keychain-only storage; sent only to
+   `api.anthropic.com`.
+5. Finish onboarding → the coach starts your intake interview.
+
+## Responsibilities & limits
+
+The coach is explicitly charged with sustainable pace: it programs rest, watches
+sleep data, and pushes back on overtraining even in Drill Sergeant mode. Pain or
+injury → training stops and it refers you to a professional. It is told it is not a
+doctor, therapist, or financial adviser, and to drop the coaching posture entirely
+and point to professional help if you appear to be in crisis. Tough on behavior,
+never on the person.
+
+## Data & cost
+
+All state (goals, schedule history, dossier, chat, reports) is a local JSON file on
+device. API usage bills your own key — daily usage is typically cents; weekly reviews
+run deeper reasoning and cost more than quick chats. "Reset everything" wipes state
+and deletes the key.
+
+## Roadmap (not yet built)
+
+- Background refresh reconciliation (silent overdue-block detection between opens)
+- Tier 2: server-side agent + push for true autonomy when the phone stays untouched
+- Reminders/Screen Time integration, voice check-ins, multi-week training programs

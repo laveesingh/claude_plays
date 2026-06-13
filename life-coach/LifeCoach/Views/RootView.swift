@@ -10,11 +10,14 @@ struct RootView: View {
         } else {
             TabView(selection: $router.selectedTab) {
                 TodayView()
-                    .tabItem { Label("Today", systemImage: "checklist") }
+                    .tabItem { Label("Today", systemImage: "calendar.day.timeline.left") }
                     .tag(Router.Tab.today)
                 ChatView()
                     .tabItem { Label("Coach", systemImage: "bubble.left.and.bubble.right.fill") }
                     .tag(Router.Tab.coach)
+                ProgressTabView()
+                    .tabItem { Label("Progress", systemImage: "chart.xyaxis.line") }
+                    .tag(Router.Tab.progress)
                 GoalsView()
                     .tabItem { Label("Goals", systemImage: "target") }
                     .tag(Router.Tab.goals)

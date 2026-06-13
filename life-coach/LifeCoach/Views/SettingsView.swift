@@ -13,6 +13,7 @@ struct SettingsView: View {
             Form {
                 apiKeySection
                 coachSection
+                integrationsSection
                 scheduleSection
                 dangerSection
             }
@@ -36,7 +37,7 @@ struct SettingsView: View {
         } header: {
             Text("Anthropic API key")
         } footer: {
-            Text("Powers your coach (Claude). Create one at console.anthropic.com → API Keys. Stored only in this device's Keychain.")
+            Text("Powers your coach (Claude). Create one at console.anthropic.com -> API Keys. Stored only in this device's Keychain.")
         }
     }
 
@@ -51,14 +52,38 @@ struct SettingsView: View {
         }
     }
 
+    private var integrationsSection: some View {
+        Section {
+            Button {
+                Task { await HealthManager.requestPermission() }
+            } label: {
+                Label("Request Health access", systemImage: "heart.fill")
+            }
+            Button {
+                Task { _ = await CalendarManager.requestPermission() }
+            } label: {
+                Label(CalendarManager.isAuthorized ? "Calendar access granted ✓" : "Request Calendar access",
+                      systemImage: "calendar")
+            }
+            Toggle("Coach writes blocks to my calendar", isOn: calendarWriteBinding)
+        } header: {
+            Text("Integrations")
+        } footer: {
+            Text("Health data verifies workouts, steps, and sleep. Calendar access lets the coach plan around real meetings and, if enabled, write its time blocks as events.")
+        }
+    }
+
     private var scheduleSection: some View {
-        Section("Daily check-in notifications") {
-            Picker("Morning", selection: morningBinding) {
+        Section("Daily session notifications") {
+            Picker("Morning brief", selection: morningBinding) {
                 ForEach(4..<13, id: \.self) { Text(hourLabel($0)).tag($0) }
             }
-            Picker("Evening", selection: eveningBinding) {
+            Picker("Evening debrief", selection: eveningBinding) {
                 ForEach(17..<24, id: \.self) { Text(hourLabel($0)).tag($0) }
             }
+            Text("Weekly review pings every Sunday. Block check-ins are scheduled automatically with each day's plan.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -67,7 +92,7 @@ struct SettingsView: View {
             Button("Reset everything", role: .destructive) {
                 showingResetConfirm = true
             }
-            .confirmationDialog("Delete all goals, history, and chat?",
+            .confirmationDialog("Delete all goals, history, dossier, and chat?",
                                 isPresented: $showingResetConfirm,
                                 titleVisibility: .visible) {
                 Button("Delete everything", role: .destructive) {
@@ -84,6 +109,13 @@ struct SettingsView: View {
         Binding(
             get: { store.state.profile?.intensity ?? .balanced },
             set: { store.state.profile?.intensity = $0 }
+        )
+    }
+
+    private var calendarWriteBinding: Binding<Bool> {
+        Binding(
+            get: { store.state.profile?.calendarWriteEnabled ?? false },
+            set: { store.state.profile?.calendarWriteEnabled = $0 }
         )
     }
 
