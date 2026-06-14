@@ -57,8 +57,13 @@ struct NewsStory: Codable, Identifiable, Hashable {
     let summary1: String          // ~30-50 words, the card body
     let summary2: String          // ~150-300 words, the full read
     let sources: [NewsSource]
-    let createdAt: Date
+    let createdAt: Date           // when WE fetched it
+    let publishedDate: Date?      // the story's own date, extracted from sources (nil if unknown)
     let signature: String         // normalized headline, used for dedup
+
+    /// The date to file this story under in the timeline: its real publication
+    /// date when we could extract one, else our fetch time as a fallback.
+    var displayDate: Date { publishedDate ?? createdAt }
 
     init(id: UUID = UUID(),
          storyNumber: Int,
@@ -68,6 +73,7 @@ struct NewsStory: Codable, Identifiable, Hashable {
          summary2: String,
          sources: [NewsSource],
          createdAt: Date = Date(),
+         publishedDate: Date? = nil,
          signature: String) {
         self.id = id
         self.storyNumber = storyNumber
@@ -77,6 +83,7 @@ struct NewsStory: Codable, Identifiable, Hashable {
         self.summary2 = summary2
         self.sources = sources
         self.createdAt = createdAt
+        self.publishedDate = publishedDate
         self.signature = signature
     }
 

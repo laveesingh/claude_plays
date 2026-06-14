@@ -67,23 +67,44 @@ struct NewsView: View {
         }
     }
 
+    /// Stories bucketed into newest-first day groups (by their own date, not fetch
+    /// time), each bucket sorted newest story first — the data behind the sectioned
+    /// timeline.
+    private var dayGroups: [(day: Date, stories: [NewsStory])] {
+        let cal = Calendar.current
+        return Dictionary(grouping: news.stories) { cal.startOfDay(for: $0.displayDate) }
+            .map { (day: $0.key, stories: $0.value.sorted {
+                $0.displayDate != $1.displayDate ? $0.displayDate > $1.displayDate
+                                                 : $0.storyNumber > $1.storyNumber
+            }) }
+            .sorted { $0.day > $1.day }
+    }
+
     private var feed: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            LazyVStack(alignment: .leading, spacing: 16, pinnedViews: [.sectionHeaders]) {
                 NewsHeader(
                     lastUpdated: news.lastUpdated,
                     isRefreshing: news.isRefreshing,
                     onRefresh: { Task { await news.refresh() } }
                 )
+                .padding(.horizontal)
 
-                ForEach(news.stories) { story in
-                    Button { reading = story } label: {
-                        StoryCard(story: story)
+                ForEach(dayGroups, id: \.day) { group in
+                    Section {
+                        ForEach(group.stories) { story in
+                            Button { reading = story } label: {
+                                StoryCard(story: story)
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.horizontal)
+                        }
+                    } header: {
+                        DateSectionHeader(day: group.day)
                     }
-                    .buttonStyle(.plain)
                 }
             }
-            .padding()
+            .padding(.vertical)
         }
         .refreshable { await news.refresh() }
     }
@@ -216,10 +237,7 @@ private struct StoryCard: View {
                     .font(.caption.weight(.semibold).monospacedDigit())
                     .foregroundStyle(.secondary)
                 InterestBadge(label: story.interestLabel)
-                Spacer(minLength: 8)
-                Text(NewsFormat.relative(story.createdAt))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
             }
 
             Text(story.headline)
@@ -238,6 +256,27 @@ private struct StoryCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(.secondarySystemBackground))
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+}
+
+// MARK: - Date section header
+
+/// A pinned timeline divider — "Today" / "Yesterday" / weekday / full date. The
+/// bar material keeps it legible while it sticks over scrolling cards.
+private struct DateSectionHeader: View {
+    let day: Date
+
+    var body: some View {
+        HStack {
+            Text(NewsFormat.daySection(day))
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.primary)
+            Spacer()
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.bar)
     }
 }
 
@@ -307,7 +346,7 @@ private struct StoryDrawer: View {
                     .foregroundStyle(.secondary)
                 InterestBadge(label: story.interestLabel)
                 Spacer(minLength: 0)
-                Text(NewsFormat.absolute(story.createdAt))
+                Text(NewsFormat.day(story.displayDate))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -466,6 +505,26 @@ private enum NewsFormat {
     /// e.g. "Jun 14, 3:42 PM" for the drawer header.
     static func absolute(_ date: Date) -> String {
         date.formatted(date: .abbreviated, time: .shortened)
+    }
+
+    /// Sticky timeline section label: "Today", "Yesterday", a weekday within the
+    /// last week, else "Jun 14, 2026".
+    static func daySection(_ date: Date) -> String {
+        let cal = Calendar.current
+        if cal.isDateInToday(date) { return "Today" }
+        if cal.isDateInYesterday(date) { return "Yesterday" }
+        let days = cal.dateComponents([.day],
+                                      from: cal.startOfDay(for: date),
+                                      to: cal.startOfDay(for: Date())).day ?? 0
+        if (0..<7).contains(days) {
+            return date.formatted(.dateTime.weekday(.wide))
+        }
+        return date.formatted(.dateTime.month(.abbreviated).day().year())
+    }
+
+    /// Date-only label (no time) for a story's own date, e.g. "Jun 14, 2026".
+    static func day(_ date: Date) -> String {
+        date.formatted(.dateTime.month(.abbreviated).day().year())
     }
 
     /// Bare host for a source URL, e.g. "reuters.com".

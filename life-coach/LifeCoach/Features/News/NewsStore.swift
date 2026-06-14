@@ -219,6 +219,7 @@ final class NewsStore: ObservableObject {
                          summary1: summary1,
                          summary2: summary2,
                          sources: sources,
+                         publishedDate: draft.publishedDate,
                          signature: signature)
     }
 
@@ -289,6 +290,7 @@ final class NewsStore: ObservableObject {
     - "headline": a clear, specific, factual headline (no clickbait, no editorializing).
     - "summary1": roughly 30-50 words - a tight lede that captures the core of the story at a glance.
     - "summary2": roughly 150-300 words - the full essential understanding of the story: what happened, who is involved, why it matters, and the key specifics. Dense and factual, no fluff, no filler, no repetition of the headline.
+    - "date": the story's publication / event date as "YYYY-MM-DD" if the results state it or clearly imply it (e.g. "Monday", "yesterday", an explicit date in the content); otherwise null. NEVER guess a date - if it isn't supported by the results, use null.
     - "sources": an array of the results this story is drawn from, each with "title" and "url" copied exactly from the provided results.
 
     Return ONLY a JSON array, no prose and no markdown code fences. Each element has exactly these keys:
@@ -297,6 +299,7 @@ final class NewsStore: ObservableObject {
         "headline": "<specific factual headline>",
         "summary1": "<~30-50 words>",
         "summary2": "<~150-300 words, full essential understanding, no fluff>",
+        "date": "<YYYY-MM-DD, or null if unknown>",
         "sources": [ { "title": "<exact result title>", "url": "<exact result url>" } ]
       }
     ]
@@ -312,6 +315,23 @@ final class NewsStore: ObservableObject {
         let summary1: String
         let summary2: String
         let sources: [NewsSource]
+        let publishedDate: Date?
+    }
+
+    /// Parses the model's "YYYY-MM-DD" date string (UTC, fixed format) to a Date;
+    /// returns nil for null/empty/malformed so we fall back to the fetch time.
+    private static let dayParser: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+
+    private static func parseDay(_ any: Any?) -> Date? {
+        guard let raw = (any as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty, raw.lowercased() != "null" else { return nil }
+        return dayParser.date(from: raw)
     }
 
     /// Robustly parse the model's reply into drafts: strip code fences, tolerate
@@ -338,7 +358,8 @@ final class NewsStore: ObservableObject {
             return StoryDraft(headline: headline,
                               summary1: summary1,
                               summary2: summary2,
-                              sources: sources)
+                              sources: sources,
+                              publishedDate: parseDay(object["date"]))
         }
     }
 
