@@ -256,7 +256,7 @@
 				DEVELOPMENT_ASSET_PATHS = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = Coach;
+				INFOPLIST_KEY_CFBundleDisplayName = Sapiod;
 				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "Your coach reads your calendar to plan your day around real commitments and, if you allow it, writes its time blocks as events.";
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "Your coach reads workouts, steps, and sleep to verify your fitness commitments instead of trusting self-reports.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Used to capture your voice when you speak to your coach instead of typing.";
@@ -292,7 +292,7 @@
 				DEVELOPMENT_ASSET_PATHS = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = Coach;
+				INFOPLIST_KEY_CFBundleDisplayName = Sapiod;
 				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "Your coach reads your calendar to plan your day around real commitments and, if you allow it, writes its time blocks as events.";
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "Your coach reads workouts, steps, and sleep to verify your fitness commitments instead of trusting self-reports.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Used to capture your voice when you speak to your coach instead of typing.";
