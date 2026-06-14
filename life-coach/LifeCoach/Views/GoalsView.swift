@@ -5,31 +5,29 @@ struct GoalsView: View {
     @State private var showingAddGoal = false
 
     var body: some View {
-        NavigationStack {
-            List {
-                if store.state.goals.isEmpty {
-                    Text("No goals yet. Add one - your coach can't push you toward nothing.")
-                        .foregroundStyle(.secondary)
-                }
-                ForEach(store.state.goals) { goal in
-                    NavigationLink {
-                        GoalDetailView(goal: goal)
-                    } label: {
-                        GoalRow(goal: goal)
-                    }
-                }
+        List {
+            if store.state.goals.isEmpty {
+                Text("No goals yet. Add one - your coach can't push you toward nothing.")
+                    .foregroundStyle(.secondary)
             }
-            .navigationTitle("Goals")
-            .toolbar {
-                Button {
-                    showingAddGoal = true
+            ForEach(store.state.goals) { goal in
+                NavigationLink {
+                    GoalDetailView(goal: goal)
                 } label: {
-                    Image(systemName: "plus")
+                    GoalRow(goal: goal)
                 }
             }
-            .sheet(isPresented: $showingAddGoal) {
-                AddGoalSheet()
+        }
+        .navigationTitle("Goals")
+        .toolbar {
+            Button {
+                showingAddGoal = true
+            } label: {
+                Image(systemName: "plus")
             }
+        }
+        .sheet(isPresented: $showingAddGoal) {
+            AddGoalSheet()
         }
     }
 }

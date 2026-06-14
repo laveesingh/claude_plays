@@ -19,24 +19,22 @@ struct ChatView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                if !engine.hasAPIKey {
-                    missingKeyBanner
-                }
-                messageList
-                if let error = engine.lastError {
-                    Text(error)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                        .padding(.horizontal)
-                        .padding(.bottom, 4)
-                }
-                inputBar
+        VStack(spacing: 0) {
+            if !engine.hasAPIKey {
+                missingKeyBanner
             }
-            .navigationTitle("Coach")
-            .navigationBarTitleDisplayMode(.inline)
+            messageList
+            if let error = engine.lastError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .padding(.horizontal)
+                    .padding(.bottom, 4)
+            }
+            inputBar
         }
+        .navigationTitle("Coach")
+        .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showVoice) {
             VoiceInputView(voice: voice) { finalText in
                 showVoice = false
@@ -54,7 +52,7 @@ struct ChatView: View {
 
     private var missingKeyBanner: some View {
         Button {
-            router.selectedTab = .settings
+            router.showSettings = true
         } label: {
             Label("Add your \(store.state.ai.provider.keyLabel) in Settings to activate your coach",
                   systemImage: "key.fill")

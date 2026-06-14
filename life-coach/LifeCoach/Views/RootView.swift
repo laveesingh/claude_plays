@@ -1,5 +1,9 @@
 import SwiftUI
 
+/// The Sapiod shell. Builds the tab bar by iterating `AppFeature.allCases`, so
+/// a future feature is a single new enum case. Settings is no longer a tab —
+/// it's presented as a sheet driven by `router.showSettings` (opened from the
+/// Home gear and the coach's missing-key banner).
 struct RootView: View {
     @EnvironmentObject private var store: AppStore
     @EnvironmentObject private var router: Router
@@ -9,21 +13,14 @@ struct RootView: View {
             OnboardingView()
         } else {
             TabView(selection: $router.selectedTab) {
-                TodayView()
-                    .tabItem { Label("Today", systemImage: "calendar.day.timeline.left") }
-                    .tag(Router.Tab.today)
-                ChatView()
-                    .tabItem { Label("Coach", systemImage: "bubble.left.and.bubble.right.fill") }
-                    .tag(Router.Tab.coach)
-                ProgressTabView()
-                    .tabItem { Label("Progress", systemImage: "chart.xyaxis.line") }
-                    .tag(Router.Tab.progress)
-                GoalsView()
-                    .tabItem { Label("Goals", systemImage: "target") }
-                    .tag(Router.Tab.goals)
+                ForEach(AppFeature.allCases) { feature in
+                    feature.rootView
+                        .tabItem { Label(feature.title, systemImage: feature.systemImage) }
+                        .tag(feature)
+                }
+            }
+            .sheet(isPresented: $router.showSettings) {
                 SettingsView()
-                    .tabItem { Label("Settings", systemImage: "gearshape.fill") }
-                    .tag(Router.Tab.settings)
             }
         }
     }

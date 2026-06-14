@@ -8,20 +8,18 @@ struct TodayView: View {
     @State private var showingEveningReview = false
 
     var body: some View {
-        NavigationStack {
-            List {
-                scoreboard
-                if !store.overdueBlocks.isEmpty {
-                    overdueBanner
-                }
-                sessionSection
-                scheduleSection
-                habitsSection
+        List {
+            scoreboard
+            if !store.overdueBlocks.isEmpty {
+                overdueBanner
             }
-            .navigationTitle(dateTitle)
-            .sheet(isPresented: $showingEveningReview) {
-                EveningReviewSheet()
-            }
+            sessionSection
+            scheduleSection
+            habitsSection
+        }
+        .navigationTitle(dateTitle)
+        .sheet(isPresented: $showingEveningReview) {
+            EveningReviewSheet()
         }
     }
 
@@ -60,7 +58,7 @@ struct TodayView: View {
     private var overdueBanner: some View {
         Section {
             Button {
-                router.selectedTab = .coach
+                router.goToCoachChat()
                 Task {
                     await engine.send(
                         "(Midday correction triggered: the client has unresolved overdue blocks.)",
@@ -84,7 +82,7 @@ struct TodayView: View {
     private var sessionSection: some View {
         Section("Sessions") {
             Button {
-                router.selectedTab = .coach
+                router.goToCoachChat()
                 Task {
                     await engine.send("Good morning, coach. Run the morning brief.",
                                       session: .morningBrief)
@@ -101,7 +99,7 @@ struct TodayView: View {
             }
 
             Button {
-                router.selectedTab = .coach
+                router.goToCoachChat()
                 Task {
                     await engine.send("Coach, let's do the weekly review.",
                                       session: .weeklyReview)
@@ -295,7 +293,7 @@ struct EveningReviewSheet: View {
         }
 
         dismiss()
-        router.selectedTab = .coach
+        router.goToCoachChat()
         Task {
             await engine.send(message, session: .eveningDebrief)
         }

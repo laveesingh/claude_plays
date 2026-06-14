@@ -5,15 +5,13 @@ struct ProgressTabView: View {
     @EnvironmentObject private var store: AppStore
 
     var body: some View {
-        NavigationStack {
-            List {
-                executionSection
-                metricsSection
-                reportsSection
-                dossierSection
-            }
-            .navigationTitle("Progress")
+        List {
+            executionSection
+            metricsSection
+            reportsSection
+            dossierSection
         }
+        .navigationTitle("Progress")
     }
 
     private var executionSection: some View {
