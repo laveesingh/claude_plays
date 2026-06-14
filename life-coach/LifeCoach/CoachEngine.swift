@@ -96,6 +96,10 @@ final class CoachEngine: ObservableObject {
     private var healthSummaryCache: String?
     private var calendarSummaryCache: String?
 
+    /// Set when the coach asks for structured input; ends the turn so the client
+    /// can render the controls and the user's selection becomes the next message.
+    private var pendingInputRequest: InputRequest?
+
     init(store: AppStore) {
         self.store = store
     }
@@ -119,6 +123,7 @@ final class CoachEngine: ObservableObject {
         isResponding = true
         streamingText = ""
         lastError = nil
+        pendingInputRequest = nil
         defer { isResponding = false }
 
         // Ground the prompt in reality before reasoning.
@@ -153,6 +158,7 @@ final class CoachEngine: ObservableObject {
                     ])
                 }
                 apiMessages.append(["role": "user", "content": toolResults])
+                if pendingInputRequest != nil { break }
                 if !streamingText.isEmpty, !streamingText.hasSuffix("\n") {
                     streamingText += "\n\n"
                 }
@@ -162,10 +168,11 @@ final class CoachEngine: ObservableObject {
         }
 
         let finalText = streamingText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !finalText.isEmpty {
-            store.appendChat(role: "assistant", text: finalText)
+        if !finalText.isEmpty || pendingInputRequest != nil {
+            store.appendChat(role: "assistant", text: finalText, inputRequest: pendingInputRequest)
         }
         streamingText = ""
+        pendingInputRequest = nil
     }
 
     // MARK: - History
@@ -533,6 +540,38 @@ final class CoachEngine: ObservableObject {
                 "properties": [String: Any](),
             ],
         ],
+        [
+            "name": "request_user_input",
+            "description": "Render tap-friendly input controls for the client to answer your question, instead of making them type a freeform reply. Write your question as normal text in the SAME turn first, then call this tool. Use it whenever the answer is naturally structured - choosing one option, choosing several, rating on a scale, a number/time/date, or yes/no. Keep it to ONE focused question (1-3 fields). The client always also has a free-text box, so set allow_custom true (or add a 'text' field) whenever the answer might not fit your options. After you call this, the turn ends and the client's selection arrives as their next message - do not keep talking or call other tools alongside it.",
+            "input_schema": [
+                "type": "object",
+                "properties": [
+                    "prompt": ["type": "string", "description": "Optional one-line restatement of what you're asking, shown above the controls."],
+                    "fields": [
+                        "type": "array",
+                        "description": "1-3 input fields.",
+                        "items": [
+                            "type": "object",
+                            "properties": [
+                                "id": ["type": "string", "description": "Short identifier, also used as the field's label if no label is given."],
+                                "label": ["type": "string", "description": "Human-readable label for this field."],
+                                "type": ["type": "string", "enum": ["single_select", "multi_select", "scale", "number", "time", "date", "boolean", "text"]],
+                                "options": ["type": "array", "items": ["type": "string"], "description": "Choices for single_select / multi_select."],
+                                "min": ["type": "number", "description": "Lower bound for scale."],
+                                "max": ["type": "number", "description": "Upper bound for scale."],
+                                "step": ["type": "number", "description": "Step for scale (default 1)."],
+                                "unit": ["type": "string", "description": "Unit shown with number/scale, e.g. 'hours', 'kg'."],
+                                "placeholder": ["type": "string", "description": "Placeholder for number/text fields."],
+                                "allow_custom": ["type": "boolean", "description": "Add an 'Other…' free-text entry to a select. Default false."],
+                            ],
+                            "required": ["label", "type"],
+                        ],
+                    ],
+                    "submit_label": ["type": "string", "description": "Optional label for the submit button (default 'Send')."],
+                ],
+                "required": ["fields"],
+            ],
+        ],
     ]
 
     private func handleTool(name: String, input: [String: Any]) async -> String {
@@ -691,9 +730,51 @@ final class CoachEngine: ObservableObject {
             store.state.profile?.intakeComplete = true
             return "Intake marked complete. You are now in full coaching mode."
 
+        case "request_user_input":
+            guard let request = Self.parseInputRequest(input) else {
+                return "Error: request_user_input needs a non-empty 'fields' array with valid types."
+            }
+            pendingInputRequest = request
+            return "Controls are now displayed to the client. Their answer arrives as your next user message. Do not call request_user_input again or keep talking until they respond."
+
         default:
             return "Error: unknown tool '\(name)'."
         }
+    }
+
+    private static func parseInputRequest(_ input: [String: Any]) -> InputRequest? {
+        guard let rawFields = input["fields"] as? [[String: Any]] else { return nil }
+        let fields = rawFields.compactMap { parseInputField($0) }
+        guard !fields.isEmpty else { return nil }
+        return InputRequest(prompt: input["prompt"] as? String,
+                            fields: fields,
+                            submitLabel: input["submit_label"] as? String)
+    }
+
+    private static func parseInputField(_ raw: [String: Any]) -> InputField? {
+        guard let typeRaw = raw["type"] as? String,
+              let type = InputFieldType(rawValue: typeRaw) else { return nil }
+        let label = (raw["label"] as? String) ?? (raw["id"] as? String) ?? ""
+        guard !label.isEmpty else { return nil }
+        let key = (raw["id"] as? String) ?? label
+        let options = (raw["options"] as? [String]) ?? []
+        return InputField(key: key,
+                          label: label,
+                          type: type,
+                          options: options,
+                          min: asDouble(raw["min"]),
+                          max: asDouble(raw["max"]),
+                          step: asDouble(raw["step"]),
+                          unit: raw["unit"] as? String,
+                          placeholder: raw["placeholder"] as? String,
+                          allowCustom: (raw["allow_custom"] as? Bool) ?? false)
+    }
+
+    private static func asDouble(_ any: Any?) -> Double? {
+        if let value = any as? Double { return value }
+        if let value = any as? Int { return Double(value) }
+        if let value = any as? NSNumber { return value.doubleValue }
+        return nil
     }
 
     private static func parseClock(_ value: String) -> Int? {
@@ -859,6 +940,7 @@ final class CoachEngine: ObservableObject {
         - Own the structure: every goal needs milestones with deadlines and a weekly target. If a deadline slips, renegotiate it explicitly in conversation - nothing drifts silently.
         - Memory discipline: your visible chat history is only the recent messages. Anything durable - constraints, patterns, promises, excuses, wins - goes in the dossier via update_dossier, or it is lost.
         - Coaching methodology: GROW (goal, reality, options, will) for decisions; implementation intentions ("after X, I do Y") for habits; progressive overload for training; timeboxing for focus. Use them, don't lecture about them.
+        - Ask with controls: when your message poses a question with naturally structured answers (pick one, pick several, a rating, a number, a time/date, yes/no), call request_user_input so the client taps their answer instead of typing. Put the question in your text first, then call the tool with 1-3 fields. Always leave room for free text (allow_custom on a select, or a text field) for anything open-ended. Lean on this heavily during the intake interview and any time you're collecting specifics.
         - Keep replies tight: a few sentences or a short list. One question maximum per reply. The schedule speaks for itself.
 
         ## RESPONSIBILITIES AND LIMITS

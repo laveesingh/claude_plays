@@ -252,12 +252,15 @@
 				CODE_SIGN_ENTITLEMENTS = LifeCoach/LifeCoach.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 2FJ3SN459Q;
 				DEVELOPMENT_ASSET_PATHS = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Coach;
 				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "Your coach reads your calendar to plan your day around real commitments and, if you allow it, writes its time blocks as events.";
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "Your coach reads workouts, steps, and sleep to verify your fitness commitments instead of trusting self-reports.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Used to capture your voice when you speak to your coach instead of typing.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Used to transcribe your speech to text on-device so you can talk to your coach.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -269,7 +272,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.example.LifeCoach;
+				PRODUCT_BUNDLE_IDENTIFIER = com.laveesingh.LifeCoach;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -285,12 +288,15 @@
 				CODE_SIGN_ENTITLEMENTS = LifeCoach/LifeCoach.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 2FJ3SN459Q;
 				DEVELOPMENT_ASSET_PATHS = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Coach;
 				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "Your coach reads your calendar to plan your day around real commitments and, if you allow it, writes its time blocks as events.";
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "Your coach reads workouts, steps, and sleep to verify your fitness commitments instead of trusting self-reports.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Used to capture your voice when you speak to your coach instead of typing.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Used to transcribe your speech to text on-device so you can talk to your coach.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -302,7 +308,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.example.LifeCoach;
+				PRODUCT_BUNDLE_IDENTIFIER = com.laveesingh.LifeCoach;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;

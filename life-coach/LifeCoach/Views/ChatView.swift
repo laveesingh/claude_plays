@@ -5,7 +5,11 @@ struct ChatView: View {
     @EnvironmentObject private var engine: CoachEngine
     @EnvironmentObject private var router: Router
 
+    @StateObject private var voice = VoiceController()
+    @StateObject private var synth = SpeechSynth()
+
     @State private var draft = ""
+    @State private var showVoice = false
     @FocusState private var inputFocused: Bool
 
     var body: some View {
@@ -26,6 +30,19 @@ struct ChatView: View {
             }
             .navigationTitle("Coach")
             .navigationBarTitleDisplayMode(.inline)
+        }
+        .sheet(isPresented: $showVoice) {
+            VoiceInputView(voice: voice) { finalText in
+                showVoice = false
+                let trimmed = finalText.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { return }
+                draft = draft.isEmpty ? trimmed : draft + " " + trimmed
+                inputFocused = true
+            } onCancel: {
+                showVoice = false
+            }
+            .presentationDetents([.height(320)])
+            .presentationDragIndicator(.visible)
         }
     }
 
@@ -51,8 +68,22 @@ struct ChatView: View {
                         emptyState
                     }
                     ForEach(store.state.chat) { message in
-                        MessageBubble(message: message)
-                            .id(message.id)
+                        VStack(alignment: .leading, spacing: 8) {
+                            MessageBubble(message: message,
+                                          isSpeaking: synth.speakingMessageID == message.id,
+                                          onSpeak: message.role == "assistant" ? { synth.toggle(message) } : nil)
+                            if let request = message.inputRequest,
+                               message.role == "assistant",
+                               message.id == store.state.chat.last?.id,
+                               !engine.isResponding {
+                                StructuredInputView(request: request,
+                                                    disabled: engine.isResponding) { summary in
+                                    inputFocused = false
+                                    submit(summary)
+                                }
+                            }
+                        }
+                        .id(message.id)
                     }
                     if !engine.streamingText.isEmpty {
                         MessageBubble(message: ChatMessage(role: "assistant", text: engine.streamingText))
@@ -71,6 +102,7 @@ struct ChatView: View {
                 }
                 .padding(.vertical, 12)
             }
+            .scrollDismissesKeyboard(.interactively)
             .onChange(of: store.state.chat.count) {
                 scrollToBottom(proxy)
             }
@@ -120,12 +152,21 @@ struct ChatView: View {
                 .textFieldStyle(.roundedBorder)
                 .focused($inputFocused)
             Button {
+                inputFocused = false
+                showVoice = true
+            } label: {
+                Image(systemName: "mic.fill")
+                    .font(.title3)
+                    .frame(width: 36, height: 36)
+                    .foregroundStyle(Color.accentColor)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Speak")
+            Button {
                 let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !text.isEmpty else { return }
                 draft = ""
-                Task {
-                    await engine.send(text)
-                }
+                submit(text)
             } label: {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.title2)
@@ -136,22 +177,45 @@ struct ChatView: View {
         .padding(.vertical, 8)
         .background(.bar)
     }
+
+    private func submit(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        Task { await engine.send(trimmed) }
+    }
 }
 
 struct MessageBubble: View {
     let message: ChatMessage
+    var isSpeaking: Bool = false
+    var onSpeak: (() -> Void)? = nil
 
     private var isUser: Bool { message.role == "user" }
 
     var body: some View {
         HStack {
             if isUser { Spacer(minLength: 48) }
-            Text(message.text)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(isUser ? Color.accentColor : Color(.secondarySystemBackground))
-                .foregroundStyle(isUser ? Color.white : Color.primary)
-                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            VStack(alignment: isUser ? .trailing : .leading, spacing: 4) {
+                if !message.text.isEmpty {
+                    Text(message.text)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(isUser ? Color.accentColor : Color(.secondarySystemBackground))
+                        .foregroundStyle(isUser ? Color.white : Color.primary)
+                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                }
+                if !isUser, !message.text.isEmpty, let onSpeak {
+                    Button(action: onSpeak) {
+                        Label(isSpeaking ? "Stop" : "Listen",
+                              systemImage: isSpeaking ? "stop.circle" : "speaker.wave.2")
+                            .labelStyle(.iconOnly)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .padding(.leading, 6)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
             if !isUser { Spacer(minLength: 48) }
         }
         .padding(.horizontal)

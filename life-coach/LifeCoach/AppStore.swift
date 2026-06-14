@@ -195,8 +195,8 @@ final class AppStore: ObservableObject {
 
     // MARK: - Chat
 
-    func appendChat(role: String, text: String) {
-        state.chat.append(ChatMessage(role: role, text: text))
+    func appendChat(role: String, text: String, inputRequest: InputRequest? = nil) {
+        state.chat.append(ChatMessage(role: role, text: text, inputRequest: inputRequest))
         if state.chat.count > 400 {
             state.chat.removeFirst(state.chat.count - 400)
         }

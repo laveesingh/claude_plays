@@ -203,6 +203,43 @@ struct ChatMessage: Identifiable, Codable {
     var role: String // "user" or "assistant"
     var text: String
     var date = Date()
+    /// When the coach wants a structured answer, it attaches the controls here.
+    var inputRequest: InputRequest?
+}
+
+// MARK: - Structured input (coach-driven UI)
+
+enum InputFieldType: String, Codable {
+    case singleSelect = "single_select"
+    case multiSelect = "multi_select"
+    case scale
+    case number
+    case time
+    case date
+    case boolean
+    case text
+}
+
+struct InputField: Identifiable, Codable {
+    var id = UUID()
+    /// Stable key the coach supplied (used only for the readable summary label).
+    var key: String
+    var label: String
+    var type: InputFieldType
+    var options: [String] = []
+    var min: Double?
+    var max: Double?
+    var step: Double?
+    var unit: String?
+    var placeholder: String?
+    /// For selects: offer an "Other…" free-text entry in addition to the options.
+    var allowCustom: Bool = false
+}
+
+struct InputRequest: Codable {
+    var prompt: String?
+    var fields: [InputField]
+    var submitLabel: String?
 }
 
 struct UserProfile: Codable {
