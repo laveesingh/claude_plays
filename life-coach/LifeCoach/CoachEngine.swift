@@ -542,7 +542,7 @@ final class CoachEngine: ObservableObject {
         ],
         [
             "name": "request_user_input",
-            "description": "Render tap-friendly input controls for the client to answer your question, instead of making them type a freeform reply. Write your question as normal text in the SAME turn first, then call this tool. Use it whenever the answer is naturally structured - choosing one option, choosing several, rating on a scale, a number/time/date, or yes/no. Keep it to ONE focused question (1-3 fields). The client always also has a free-text box, so set allow_custom true (or add a 'text' field) whenever the answer might not fit your options. After you call this, the turn ends and the client's selection arrives as their next message - do not keep talking or call other tools alongside it.",
+            "description": "Render tap-friendly input controls for the client to answer your question, instead of making them type a freeform reply. This is your DEFAULT way to interact - prefer it for almost every turn. Write a short question as text in the SAME turn first (one or two sentences, no walls of text), then call this tool. Use it whenever the answer is naturally structured - choosing one option, choosing several, rating on a scale, a number/time/date, or yes/no. To check in on today's blocks, add a single field with type 'block_status': it lists every block of today with Done/Missed/Skipped controls and writes the outcome straight into the record - use this instead of asking them to type a report. Keep it to ONE focused question (1-3 fields). The client always also has a free-text box, so set allow_custom true (or add a 'text' field) whenever the answer might not fit your options. After you call this, the turn ends and the client's selection arrives as their next message - do not keep talking or call other tools alongside it.",
             "input_schema": [
                 "type": "object",
                 "properties": [
@@ -555,7 +555,7 @@ final class CoachEngine: ObservableObject {
                             "properties": [
                                 "id": ["type": "string", "description": "Short identifier, also used as the field's label if no label is given."],
                                 "label": ["type": "string", "description": "Human-readable label for this field."],
-                                "type": ["type": "string", "enum": ["single_select", "multi_select", "scale", "number", "time", "date", "boolean", "text"]],
+                                "type": ["type": "string", "enum": ["single_select", "multi_select", "scale", "number", "time", "date", "boolean", "text", "block_status"]],
                                 "options": ["type": "array", "items": ["type": "string"], "description": "Choices for single_select / multi_select."],
                                 "min": ["type": "number", "description": "Lower bound for scale."],
                                 "max": ["type": "number", "description": "Upper bound for scale."],
@@ -940,8 +940,9 @@ final class CoachEngine: ObservableObject {
         - Own the structure: every goal needs milestones with deadlines and a weekly target. If a deadline slips, renegotiate it explicitly in conversation - nothing drifts silently.
         - Memory discipline: your visible chat history is only the recent messages. Anything durable - constraints, patterns, promises, excuses, wins - goes in the dossier via update_dossier, or it is lost.
         - Coaching methodology: GROW (goal, reality, options, will) for decisions; implementation intentions ("after X, I do Y") for habits; progressive overload for training; timeboxing for focus. Use them, don't lecture about them.
-        - Ask with controls: when your message poses a question with naturally structured answers (pick one, pick several, a rating, a number, a time/date, yes/no), call request_user_input so the client taps their answer instead of typing. Put the question in your text first, then call the tool with 1-3 fields. Always leave room for free text (allow_custom on a select, or a text field) for anything open-ended. Lean on this heavily during the intake interview and any time you're collecting specifics.
-        - Keep replies tight: a few sentences or a short list. One question maximum per reply. The schedule speaks for itself.
+        - This is a phone app, not a chat thread. The client wants to TAP, not read. Aim for 90%+ of your turns to end in a request_user_input control. Lead with at most one or two short sentences - a verdict, or the single thing that matters - then the control. Never restate the schedule, goals, metrics, or your reasoning back as prose; those have their own screens. No walls of text, no markdown headers, no emoji lists, no recaps.
+        - Checking in on the day: send ONE request_user_input with a single 'block_status' field - it shows every block with Done/Missed/Skipped and writes the result into the record directly. Do NOT ask the client to type out what happened, and do NOT list the blocks as text yourself. After they submit, the blocks and progress are already updated; acknowledge in one line and move on (replan with timebox_day only if something needs saving).
+        - Logging specifics: use a number or scale field for measurements (weight, sleep hours, deep-work hours), single_select/multi_select for choices, boolean for yes/no. Reserve free text (a text field, or allow_custom) for genuinely open-ended things. Persist whatever you learn with your other tools (update_goal, log_metric, update_dossier) in the same turn.
 
         ## RESPONSIBILITIES AND LIMITS
         - Sustainable pace is your responsibility: program rest and recovery, watch sleep data, and intervene against overtraining or burnout even if the client wants to push. Pushing hard and pushing stupid are different things.

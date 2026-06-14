@@ -10,7 +10,13 @@ struct ChatView: View {
 
     @State private var draft = ""
     @State private var showVoice = false
+    @State private var voiceCompletion: ((String) -> Void)?
     @FocusState private var inputFocused: Bool
+
+    private func presentVoice(_ completion: @escaping (String) -> Void) {
+        voiceCompletion = completion
+        showVoice = true
+    }
 
     var body: some View {
         NavigationStack {
@@ -35,11 +41,11 @@ struct ChatView: View {
             VoiceInputView(voice: voice) { finalText in
                 showVoice = false
                 let trimmed = finalText.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty else { return }
-                draft = draft.isEmpty ? trimmed : draft + " " + trimmed
-                inputFocused = true
+                if !trimmed.isEmpty { voiceCompletion?(trimmed) }
+                voiceCompletion = nil
             } onCancel: {
                 showVoice = false
+                voiceCompletion = nil
             }
             .presentationDetents([.height(320)])
             .presentationDragIndicator(.visible)
@@ -77,7 +83,8 @@ struct ChatView: View {
                                message.id == store.state.chat.last?.id,
                                !engine.isResponding {
                                 StructuredInputView(request: request,
-                                                    disabled: engine.isResponding) { summary in
+                                                    disabled: engine.isResponding,
+                                                    presentVoice: presentVoice) { summary in
                                     inputFocused = false
                                     submit(summary)
                                 }
@@ -153,7 +160,10 @@ struct ChatView: View {
                 .focused($inputFocused)
             Button {
                 inputFocused = false
-                showVoice = true
+                presentVoice { transcript in
+                    draft = draft.isEmpty ? transcript : draft + " " + transcript
+                    inputFocused = true
+                }
             } label: {
                 Image(systemName: "mic.fill")
                     .font(.title3)

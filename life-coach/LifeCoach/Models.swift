@@ -218,6 +218,9 @@ enum InputFieldType: String, Codable {
     case date
     case boolean
     case text
+    /// Renders every block on today's schedule with a Done/Missed/Skipped
+    /// control and writes the result straight into app state on submit.
+    case blockStatus = "block_status"
 }
 
 struct InputField: Identifiable, Codable {
