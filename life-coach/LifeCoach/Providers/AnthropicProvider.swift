@@ -211,7 +211,6 @@ final class AnthropicProvider: ChatProvider {
     /// Independent of the streaming `start`/`runRound` state above.
     func complete(systemPrompt: String, userText: String, model: String) async throws -> String {
         let key = KeychainHelper.load(provider: .claude) ?? ""
-        let supportsThinkingEffort = (model == "claude-opus-4-8" || model == "claude-sonnet-4-6")
 
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
@@ -220,17 +219,16 @@ final class AnthropicProvider: ChatProvider {
         request.setValue(key, forHTTPHeaderField: "x-api-key")
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
 
-        var body: [String: Any] = [
+        // No extended thinking on one-shot completions: these are fast structured
+        // tasks (classify / cluster / generate), so we skip the thinking+effort
+        // params the streaming agent loop uses for deep reasoning.
+        let body: [String: Any] = [
             "model": model,
-            "max_tokens": 16000,
+            "max_tokens": 8000,
             "stream": false,
             "system": systemPrompt,
             "messages": [["role": "user", "content": userText]],
         ]
-        if supportsThinkingEffort {
-            body["thinking"] = ["type": "adaptive"]
-            body["output_config"] = ["effort": "high"]
-        }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (data, response) = try await URLSession.shared.data(for: request)

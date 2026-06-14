@@ -124,6 +124,9 @@ final class OllamaProvider: ChatProvider {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
 
+        // think:false — one-shot completions are structured-output tasks (classify,
+        // cluster, generate facts); they don't need chain-of-thought, and Kimi
+        // thinks by default. Disabling it cuts latency ~8x (≈18s → ≈2s).
         let body: [String: Any] = [
             "model": model,
             "messages": [
@@ -131,6 +134,7 @@ final class OllamaProvider: ChatProvider {
                 ["role": "user", "content": userText],
             ],
             "stream": false,
+            "think": false,
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
