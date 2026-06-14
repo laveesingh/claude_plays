@@ -15,6 +15,9 @@ import Combine
 final class FactscrollStore: ObservableObject {
     @Published private(set) var facts: [Fact] = []
     @Published private(set) var isGenerating = false
+    /// True when the last generation attempt produced nothing usable (model error,
+    /// empty reply, or all-duplicates). Drives a retry slide instead of a dead tail.
+    @Published private(set) var lastLoadFailed = false
 
     private let generator: FactGenerator
     private let imageService: FactImageService
@@ -79,11 +82,18 @@ final class FactscrollStore: ObservableObject {
         await generateMore(count: Self.topUpCount)
     }
 
-    /// Generate, dedup, sign, append, and persist a batch. Best-effort: a failed
-    /// generation simply appends nothing.
+    /// Retry after a failed/empty load (driven by the retry slide's button).
+    func retry() async {
+        await generateMore(count: facts.isEmpty ? Self.frontloadCount : Self.topUpCount)
+    }
+
+    /// Generate, dedup, sign, append, and persist a batch. On a failed or empty
+    /// result it sets `lastLoadFailed` so the UI can offer a retry instead of
+    /// silently stalling on an empty tail.
     private func generateMore(count: Int) async {
         guard !isGenerating else { return }
         isGenerating = true
+        lastLoadFailed = false
         defer { isGenerating = false }
 
         let raw = await generator.generate(
@@ -93,7 +103,6 @@ final class FactscrollStore: ObservableObject {
             avoidTopics: taste.avoidTopics(),
             noteHints: taste.recentNoteTexts()
         )
-        guard !raw.isEmpty else { return }
 
         var accepted: [Fact] = []
         var batchSignatures: [String] = []   // within-batch dedup guard
@@ -111,7 +120,11 @@ final class FactscrollStore: ObservableObject {
             accepted.append(Fact(text: item.text, topic: item.topic, signature: signature))
         }
 
-        guard !accepted.isEmpty else { return }
+        guard !accepted.isEmpty else {
+            // Nothing usable — surface a retry affordance rather than a dead tail.
+            lastLoadFailed = true
+            return
+        }
 
         facts.append(contentsOf: accepted)
         // Feed accepted signatures back into the ledger, most-recent-first.

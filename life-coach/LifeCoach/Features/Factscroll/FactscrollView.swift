@@ -28,6 +28,8 @@ struct FactscrollView: View {
         var result = store.facts.map(FeedSlide.fact)
         if store.isGenerating {
             result.append(.shimmer)
+        } else if store.lastLoadFailed {
+            result.append(.retry)
         }
         return result
     }
@@ -70,6 +72,16 @@ struct FactscrollView: View {
         .onChange(of: visibleID) { _, _ in
             Task { await bufferIfNeeded() }
         }
+        .onChange(of: store.facts.count) { oldCount, newCount in
+            // The shimmer/retry tail just resolved into real facts. If the user is
+            // parked on that tail, re-anchor onto the first new fact (the same
+            // on-screen slot the tail occupied) so the scroll doesn't jam on the
+            // now-removed tail id.
+            guard newCount > oldCount,
+                  visibleID == FeedSlide.tailID,
+                  oldCount < store.facts.count else { return }
+            visibleID = store.facts[oldCount].id.uuidString
+        }
     }
 
     @ViewBuilder
@@ -79,6 +91,8 @@ struct FactscrollView: View {
             FactSlide(fact: fact, store: store)
         case .shimmer:
             ShimmerSlide()
+        case .retry:
+            RetrySlide { Task { await store.retry() } }
         }
     }
 
@@ -96,11 +110,16 @@ struct FactscrollView: View {
 private enum FeedSlide: Identifiable {
     case fact(Fact)
     case shimmer
+    case retry
+
+    /// shimmer and retry share ONE stable tail id, so a loading→failed transition
+    /// keeps the same scroll identity and never jams the slide being viewed.
+    static let tailID = "feed-tail"
 
     var id: String {
         switch self {
         case .fact(let fact): return fact.id.uuidString
-        case .shimmer: return "shimmer-placeholder"
+        case .shimmer, .retry: return Self.tailID
         }
     }
 }
@@ -181,8 +200,9 @@ private struct FactSlide: View {
                     .font(.system(size: 30, weight: .bold, design: .rounded))
                     .foregroundStyle(.white)
                     .multilineTextAlignment(.leading)
+                    .minimumScaleFactor(0.6)   // shrink an unusually long fact instead of clipping it
                     .shadow(color: .black.opacity(0.45), radius: 8, y: 2)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)   // pin width to the slide, never overflow
                 if let note = fact.note, !note.isEmpty {
                     Label(note, systemImage: "note.text")
                         .font(.footnote)
@@ -423,6 +443,48 @@ private struct FirstLoadView: View {
                     .foregroundStyle(.white.opacity(0.85))
                 ProgressView()
                     .tint(.white)
+            }
+        }
+    }
+}
+
+// MARK: - Retry slide
+
+/// A stable tail slide shown when a generation attempt failed or came back empty.
+/// It shares the shimmer's identity, so a slow/failed load never leaves the feed
+/// silently stuck — the user lands on this and can tap to try again.
+private struct RetrySlide: View {
+    let onRetry: () -> Void
+
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: [Color(white: 0.12), Color.black],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            VStack(spacing: 14) {
+                Image(systemName: "arrow.clockwise.circle")
+                    .font(.system(size: 52))
+                    .foregroundStyle(.white.opacity(0.9))
+                Text("Couldn't load more")
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                Text("The model may be slow or busy. Tap to try again — or switch to a faster model (Kimi) in Settings.")
+                    .font(.subheadline)
+                    .foregroundStyle(.white.opacity(0.7))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 40)
+                Button(action: onRetry) {
+                    Label("Retry", systemImage: "arrow.clockwise")
+                        .font(.headline)
+                        .padding(.horizontal, 22)
+                        .padding(.vertical, 11)
+                        .background(.white.opacity(0.16), in: Capsule())
+                        .foregroundStyle(.white)
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 6)
             }
         }
     }
