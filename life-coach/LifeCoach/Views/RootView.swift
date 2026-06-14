@@ -36,6 +36,8 @@ struct RootView: View {
             InboxView(store: store)
         case .news:
             NewsView(store: store)
+        case .factscroll:
+            FactscrollView(store: store)
         default:
             feature.rootView
         }

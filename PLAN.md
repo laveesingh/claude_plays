@@ -37,8 +37,8 @@ phase. Test gate at each phase boundary. Bundle id stays `com.laveesingh.LifeCoa
 
 ## Phase 3 — Factscroll — needs Unsplash access key from user
 
-- [ ] (expand at phase start) Vertical snap-scroll fact feed; 5-frontload + 3-slide buffer generation w/ shimmer; Unsplash cover images
-- [ ] Like/dislike/note/share rail; AI taste engine; semantic fact dedup (claims ledger) — **brainstorm with user at phase start**
+- [x] Vertical snap-scroll fact feed; 5-frontload + 3-slide buffer generation w/ shimmer; cover images behind `FactImageService` (gradient placeholder; Unsplash swaps in once key lands)
+- [x] Like/dislike/note/share rail; v1 taste engine; v1 semantic fact dedup (signature ledger) — built/wired/installed; **refine taste + dedup with user brainstorm**
 
 ## Cross-cutting (as features land)
 
