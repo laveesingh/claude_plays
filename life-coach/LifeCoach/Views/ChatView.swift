@@ -56,7 +56,7 @@ struct ChatView: View {
         Button {
             router.selectedTab = .settings
         } label: {
-            Label("Add your Anthropic API key in Settings to activate your coach",
+            Label("Add your \(store.state.ai.provider.keyLabel) in Settings to activate your coach",
                   systemImage: "key.fill")
                 .font(.footnote)
                 .frame(maxWidth: .infinity)

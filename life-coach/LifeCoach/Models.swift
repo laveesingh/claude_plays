@@ -263,4 +263,26 @@ struct AppState: Codable {
     var coachMemory: [MemorySection] = []
     var weeklyReports: [WeeklyReport] = []
     var chat: [ChatMessage] = []
+    var ai = AIConfig()
+
+    init() {}
+
+    // Tolerant decoding: a key added later (like `ai`) must never make an older
+    // saved state fail to decode and wipe the user's data.
+    enum CodingKeys: String, CodingKey {
+        case profile, goals, days, habits, metrics, coachMemory, weeklyReports, chat, ai
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        profile = try c.decodeIfPresent(UserProfile.self, forKey: .profile)
+        goals = try c.decodeIfPresent([Goal].self, forKey: .goals) ?? []
+        days = try c.decodeIfPresent([String: DayLog].self, forKey: .days) ?? [:]
+        habits = try c.decodeIfPresent([Habit].self, forKey: .habits) ?? []
+        metrics = try c.decodeIfPresent([MetricSeries].self, forKey: .metrics) ?? []
+        coachMemory = try c.decodeIfPresent([MemorySection].self, forKey: .coachMemory) ?? []
+        weeklyReports = try c.decodeIfPresent([WeeklyReport].self, forKey: .weeklyReports) ?? []
+        chat = try c.decodeIfPresent([ChatMessage].self, forKey: .chat) ?? []
+        ai = try c.decodeIfPresent(AIConfig.self, forKey: .ai) ?? AIConfig()
+    }
 }

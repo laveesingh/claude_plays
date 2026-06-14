@@ -8,8 +8,12 @@ outcome — because you hired it to.
 
 ## The agent
 
-The coach is a Claude agent (`claude-opus-4-8`, streaming, adaptive thinking, with
-per-session reasoning effort) holding an 11-tool belt over real app and OS state:
+The coach is a streaming, tool-using agent over real app and OS state. The LLM
+backend is pluggable (a `ChatProvider` protocol — see `Providers/`): **Ollama
+Cloud** (default, e.g. `kimi-k2.6:cloud` / `minimax-m3:cloud`) and **Claude**
+(`claude-opus-4-8` / `sonnet-4-6` / `haiku-4-5`) ship today; switching is manual
+in Settings with **no automatic fallback**. Adding another provider is one
+conforming type. It holds an 11-tool belt:
 
 | Tool | What it controls |
 |---|---|
@@ -51,9 +55,11 @@ Daily morning/evening pings and a Sunday weekly-review ping are standing.
 2. Target → Signing & Capabilities: pick your team, change the bundle id
    (`com.example.LifeCoach`). The HealthKit capability is already in the entitlements.
 3. Run on a **real device** (HealthKit and lock-screen actions need hardware). iOS 17+.
-4. Get an API key at [console.anthropic.com](https://console.anthropic.com) and paste
-   it during onboarding (or later in Settings). Keychain-only storage; sent only to
-   `api.anthropic.com`.
+4. Add an API key for your chosen provider during onboarding (or later in Settings):
+   **Ollama Cloud** (default) from [ollama.com](https://ollama.com) keys, or
+   **Anthropic** from [console.anthropic.com](https://console.anthropic.com). Keys are
+   Keychain-only, edit-protected, and sent only to that provider's API. Switch
+   provider/model anytime in Settings.
 5. Finish onboarding → the coach starts your intake interview.
 
 ## Responsibilities & limits

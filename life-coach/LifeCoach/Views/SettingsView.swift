@@ -4,14 +4,14 @@ struct SettingsView: View {
     @EnvironmentObject private var store: AppStore
     @EnvironmentObject private var engine: CoachEngine
 
-    @State private var apiKey = KeychainHelper.load() ?? ""
-    @State private var keySaved = false
     @State private var showingResetConfirm = false
 
     var body: some View {
         NavigationStack {
             Form {
-                apiKeySection
+                aiSection
+                APIKeyField(provider: .ollama)
+                APIKeyField(provider: .claude)
                 coachSection
                 integrationsSection
                 scheduleSection
@@ -21,23 +21,18 @@ struct SettingsView: View {
         }
     }
 
-    private var apiKeySection: some View {
+    private var aiSection: some View {
         Section {
-            SecureField("sk-ant-...", text: $apiKey)
-                .autocorrectionDisabled()
-                .textInputAutocapitalization(.never)
-            Button(keySaved ? "Saved ✓" : "Save key") {
-                KeychainHelper.save(apiKey.trimmingCharacters(in: .whitespacesAndNewlines))
-                keySaved = true
-                Task {
-                    try? await Task.sleep(for: .seconds(2))
-                    keySaved = false
-                }
+            Picker("Provider", selection: providerBinding) {
+                ForEach(AIProvider.allCases) { Text($0.displayName).tag($0) }
+            }
+            Picker("Model", selection: modelBinding) {
+                ForEach(AIModels.list(for: store.state.ai.provider)) { Text($0.label).tag($0.tag) }
             }
         } header: {
-            Text("Anthropic API key")
+            Text("AI provider & model")
         } footer: {
-            Text("Powers your coach (Claude). Create one at console.anthropic.com -> API Keys. Stored only in this device's Keychain.")
+            Text("Using \(store.state.ai.provider.displayName) · \(AIModels.label(for: store.state.ai.activeModel)). Switching is manual — there is no automatic fallback.")
         }
     }
 
@@ -96,7 +91,7 @@ struct SettingsView: View {
                                 isPresented: $showingResetConfirm,
                                 titleVisibility: .visible) {
                 Button("Delete everything", role: .destructive) {
-                    KeychainHelper.delete()
+                    KeychainHelper.deleteAll()
                     store.resetAll()
                 }
             }
@@ -104,6 +99,25 @@ struct SettingsView: View {
     }
 
     // MARK: - Bindings
+
+    private var providerBinding: Binding<AIProvider> {
+        Binding(
+            get: { store.state.ai.provider },
+            set: { store.state.ai.provider = $0 }
+        )
+    }
+
+    private var modelBinding: Binding<String> {
+        Binding(
+            get: { store.state.ai.activeModel },
+            set: { newTag in
+                switch store.state.ai.provider {
+                case .ollama: store.state.ai.ollamaModel = newTag
+                case .claude: store.state.ai.claudeModel = newTag
+                }
+            }
+        )
+    }
 
     private var intensityBinding: Binding<CoachIntensity> {
         Binding(
@@ -152,5 +166,51 @@ struct SettingsView: View {
         let formatter = DateFormatter()
         formatter.dateFormat = "h a"
         return formatter.string(from: date)
+    }
+}
+
+/// API key entry that is read-only until the user taps Edit — protects the key
+/// from accidental changes.
+private struct APIKeyField: View {
+    let provider: AIProvider
+
+    @State private var editing = false
+    @State private var draft = ""
+
+    var body: some View {
+        Section {
+            if editing {
+                SecureField(provider.keyPlaceholder, text: $draft)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                HStack {
+                    Button("Save") {
+                        KeychainHelper.save(draft.trimmingCharacters(in: .whitespacesAndNewlines),
+                                            provider: provider)
+                        editing = false
+                    }
+                    Spacer()
+                    Button("Cancel", role: .cancel) {
+                        editing = false
+                        draft = ""
+                    }
+                }
+            } else {
+                HStack {
+                    Label(KeychainHelper.hasKey(provider: provider) ? "Key saved" : "No key set",
+                          systemImage: KeychainHelper.hasKey(provider: provider) ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                        .foregroundStyle(KeychainHelper.hasKey(provider: provider) ? Color.secondary : Color.orange)
+                    Spacer()
+                    Button("Edit") {
+                        draft = KeychainHelper.load(provider: provider) ?? ""
+                        editing = true
+                    }
+                }
+            }
+        } header: {
+            Text(provider.keyLabel)
+        } footer: {
+            Text(provider.keyFooter)
+        }
     }
 }

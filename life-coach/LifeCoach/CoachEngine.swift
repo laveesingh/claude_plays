@@ -1,10 +1,5 @@
 import Foundation
 
-struct CoachError: LocalizedError {
-    let message: String
-    var errorDescription: String? { message }
-}
-
 /// The session being run determines the coach's protocol and reasoning effort.
 enum CoachSession {
     case intake
@@ -89,8 +84,13 @@ final class CoachEngine: ObservableObject {
     @Published var lastError: String?
 
     private let store: AppStore
-    private let model = "claude-opus-4-8"
-    private let endpoint = URL(string: "https://api.anthropic.com/v1/messages")!
+    private let anthropic = AnthropicProvider()
+    private let ollama = OllamaProvider()
+
+    /// The active backend, resolved from persisted settings each send.
+    private var currentProvider: ChatProvider {
+        store.state.ai.provider == .ollama ? ollama : anthropic
+    }
 
     /// Pre-fetched once per send so the prompt reflects current reality.
     private var healthSummaryCache: String?
@@ -104,17 +104,15 @@ final class CoachEngine: ObservableObject {
         self.store = store
     }
 
-    var hasAPIKey: Bool {
-        guard let key = KeychainHelper.load() else { return false }
-        return !key.isEmpty
-    }
+    var hasAPIKey: Bool { currentProvider.hasKey() }
 
     /// Sends a message to the coach. `hidden` user turns are not shown in the
     /// transcript (app-generated session triggers); the reply is always shown.
     func send(_ userText: String, hidden: Bool = false, session: CoachSession = .adHoc) async {
         guard !isResponding else { return }
-        guard let apiKey = KeychainHelper.load(), !apiKey.isEmpty else {
-            lastError = "Add your Anthropic API key in Settings so your coach can respond."
+        let provider = currentProvider
+        guard provider.hasKey() else {
+            lastError = "Add your \(store.state.ai.provider.keyLabel) in Settings so your coach can respond."
             return
         }
         if !hidden {
@@ -135,29 +133,28 @@ final class CoachEngine: ObservableObject {
             apiContent += "\n\n[\(instruction)]"
         }
 
-        var apiMessages = buildHistory()
-        apiMessages.append(["role": "user", "content": apiContent])
+        provider.start(systemPrompt: systemPrompt(),
+                       tools: Self.toolDefinitions,
+                       history: buildHistory(),
+                       userText: apiContent,
+                       model: store.state.ai.activeModel,
+                       effort: session.effort)
 
         do {
             var rounds = 0
             while rounds < 8 {
                 rounds += 1
-                let round = try await streamOnce(apiKey: apiKey,
-                                                 messages: apiMessages,
-                                                 effort: session.effort)
-                guard round.stopReason == "tool_use", !round.toolUses.isEmpty else { break }
-
-                apiMessages.append(["role": "assistant", "content": round.contentBlocks])
-                var toolResults: [[String: Any]] = []
-                for tool in round.toolUses {
-                    let output = await handleTool(name: tool.name, input: tool.input)
-                    toolResults.append([
-                        "type": "tool_result",
-                        "tool_use_id": tool.id,
-                        "content": output,
-                    ])
+                let round = try await provider.runRound { [weak self] text in
+                    self?.streamingText += text
                 }
-                apiMessages.append(["role": "user", "content": toolResults])
+                guard round.stopReason == "tool_use", !round.toolCalls.isEmpty else { break }
+
+                var results: [AgentToolResult] = []
+                for call in round.toolCalls {
+                    let output = await handleTool(name: call.name, input: call.input)
+                    results.append(AgentToolResult(id: call.id, name: call.name, output: output))
+                }
+                provider.appendToolResults(results)
                 if pendingInputRequest != nil { break }
                 if !streamingText.isEmpty, !streamingText.hasSuffix("\n") {
                     streamingText += "\n\n"
@@ -177,197 +174,8 @@ final class CoachEngine: ObservableObject {
 
     // MARK: - History
 
-    private func buildHistory() -> [[String: Any]] {
-        let recent = store.state.chat.suffix(40)
-        var history: [[String: Any]] = recent.map { ["role": $0.role, "content": $0.text] }
-        // The API requires the first message to be a user turn; hidden session
-        // triggers mean the persisted transcript can start with the assistant.
-        if let first = history.first, (first["role"] as? String) == "assistant" {
-            history.insert(["role": "user", "content": "(Session resumed.)"], at: 0)
-        }
-        return history
-    }
-
-    // MARK: - Streaming request
-
-    private struct ToolUse {
-        let id: String
-        let name: String
-        let input: [String: Any]
-    }
-
-    private struct RoundResult {
-        let stopReason: String?
-        let contentBlocks: [[String: Any]]
-        let toolUses: [ToolUse]
-    }
-
-    private func streamOnce(apiKey: String,
-                            messages: [[String: Any]],
-                            effort: String) async throws -> RoundResult {
-        var request = URLRequest(url: endpoint)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 300
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-
-        let body: [String: Any] = [
-            "model": model,
-            "max_tokens": 16000,
-            "stream": true,
-            "thinking": ["type": "adaptive"],
-            "output_config": ["effort": effort],
-            "system": systemPrompt(),
-            "tools": Self.toolDefinitions,
-            "messages": messages,
-        ]
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-        let (bytes, response) = try await URLSession.shared.bytes(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw CoachError(message: "Invalid response from the API.")
-        }
-        guard http.statusCode == 200 else {
-            var errorBody = ""
-            for try await line in bytes.lines {
-                errorBody += line
-            }
-            throw CoachError(message: Self.apiErrorMessage(from: errorBody, status: http.statusCode))
-        }
-
-        var stopReason: String?
-        var order: [Int] = []
-        var blockTypes: [Int: String] = [:]
-        var textBlocks: [Int: String] = [:]
-        var thinkingBlocks: [Int: String] = [:]
-        var thinkingSignatures: [Int: String] = [:]
-        var redactedData: [Int: String] = [:]
-        var toolMeta: [Int: (id: String, name: String)] = [:]
-        var toolJSON: [Int: String] = [:]
-
-        for try await line in bytes.lines {
-            guard line.hasPrefix("data: ") else { continue }
-            let payload = String(line.dropFirst(6))
-            guard let data = payload.data(using: .utf8),
-                  let event = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let type = event["type"] as? String else { continue }
-
-            switch type {
-            case "content_block_start":
-                guard let index = event["index"] as? Int,
-                      let block = event["content_block"] as? [String: Any],
-                      let blockType = block["type"] as? String else { continue }
-                order.append(index)
-                blockTypes[index] = blockType
-                switch blockType {
-                case "text":
-                    textBlocks[index] = ""
-                case "thinking":
-                    thinkingBlocks[index] = (block["thinking"] as? String) ?? ""
-                    thinkingSignatures[index] = (block["signature"] as? String) ?? ""
-                case "redacted_thinking":
-                    redactedData[index] = (block["data"] as? String) ?? ""
-                case "tool_use":
-                    toolMeta[index] = (block["id"] as? String ?? "", block["name"] as? String ?? "")
-                    toolJSON[index] = ""
-                default:
-                    break
-                }
-            case "content_block_delta":
-                guard let index = event["index"] as? Int,
-                      let delta = event["delta"] as? [String: Any],
-                      let deltaType = delta["type"] as? String else { continue }
-                switch deltaType {
-                case "text_delta":
-                    if let text = delta["text"] as? String {
-                        textBlocks[index, default: ""] += text
-                        streamingText += text
-                    }
-                case "thinking_delta":
-                    if let text = delta["thinking"] as? String {
-                        thinkingBlocks[index, default: ""] += text
-                    }
-                case "signature_delta":
-                    if let signature = delta["signature"] as? String {
-                        thinkingSignatures[index, default: ""] += signature
-                    }
-                case "input_json_delta":
-                    if let partial = delta["partial_json"] as? String {
-                        toolJSON[index, default: ""] += partial
-                    }
-                default:
-                    break
-                }
-            case "message_delta":
-                if let delta = event["delta"] as? [String: Any],
-                   let reason = delta["stop_reason"] as? String {
-                    stopReason = reason
-                }
-            case "error":
-                let message = (event["error"] as? [String: Any])?["message"] as? String
-                throw CoachError(message: message ?? "The API returned a stream error.")
-            default:
-                break
-            }
-        }
-
-        // Rebuild assistant content in order. Thinking blocks must be echoed
-        // back unchanged (signatures included) when continuing the tool loop.
-        var contentBlocks: [[String: Any]] = []
-        var toolUses: [ToolUse] = []
-        for index in order {
-            switch blockTypes[index] {
-            case "text":
-                let text = textBlocks[index] ?? ""
-                if !text.isEmpty {
-                    contentBlocks.append(["type": "text", "text": text])
-                }
-            case "thinking":
-                contentBlocks.append([
-                    "type": "thinking",
-                    "thinking": thinkingBlocks[index] ?? "",
-                    "signature": thinkingSignatures[index] ?? "",
-                ])
-            case "redacted_thinking":
-                contentBlocks.append([
-                    "type": "redacted_thinking",
-                    "data": redactedData[index] ?? "",
-                ])
-            case "tool_use":
-                guard let meta = toolMeta[index] else { continue }
-                var input: [String: Any] = [:]
-                let json = toolJSON[index] ?? ""
-                if let data = json.data(using: .utf8),
-                   let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                    input = parsed
-                }
-                contentBlocks.append(["type": "tool_use", "id": meta.id, "name": meta.name, "input": input])
-                toolUses.append(ToolUse(id: meta.id, name: meta.name, input: input))
-            default:
-                break
-            }
-        }
-
-        if stopReason == "refusal" {
-            throw CoachError(message: "The coach declined to respond to that request.")
-        }
-        return RoundResult(stopReason: stopReason, contentBlocks: contentBlocks, toolUses: toolUses)
-    }
-
-    private static func apiErrorMessage(from body: String, status: Int) -> String {
-        if let data = body.data(using: .utf8),
-           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let error = object["error"] as? [String: Any],
-           let message = error["message"] as? String {
-            return message
-        }
-        switch status {
-        case 401: return "Invalid API key. Check it in Settings."
-        case 429: return "Rate limited - wait a moment and try again."
-        case 529: return "The API is overloaded. Try again shortly."
-        default: return "API error (HTTP \(status))."
-        }
+    private func buildHistory() -> [ChatTurn] {
+        store.state.chat.suffix(40).map { ChatTurn(role: $0.role, text: $0.text) }
     }
 
     // MARK: - Tool belt

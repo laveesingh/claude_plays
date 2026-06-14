@@ -171,13 +171,13 @@ struct OnboardingView: View {
 
     private var apiKeyStep: some View {
         Form {
-            Section("Anthropic API key") {
-                SecureField("sk-ant-...", text: $apiKey)
+            Section(store.state.ai.provider.keyLabel) {
+                SecureField(store.state.ai.provider.keyPlaceholder, text: $apiKey)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
             }
             Section {
-                Text("The coach is powered by Claude. Create a key at console.anthropic.com -> API Keys, then paste it here. It's stored only in this device's Keychain. You can also add it later in Settings.")
+                Text(store.state.ai.provider.keyFooter + " You can also add it (or add the other provider's key, and switch) later in Settings.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -232,7 +232,7 @@ struct OnboardingView: View {
     private func finish() {
         let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedKey.isEmpty {
-            KeychainHelper.save(trimmedKey)
+            KeychainHelper.save(trimmedKey, provider: store.state.ai.provider)
         }
 
         let goals = [
