@@ -32,8 +32,8 @@ phase. Test gate at each phase boundary. Bundle id stays `com.laveesingh.LifeCoa
 
 ## Phase 2 — News — builds shared GroundingService
 
-- [ ] (expand at phase start) Editable topics list; `GroundingService` over Ollama `web_search`/`web_fetch` + Anthropic native
-- [ ] Timeline feed; summary1 (~30–50w) + drawer summary2 (~150–300w) + sources; auto story number + normalized interest label; dedup + freshness (no stale general knowledge)
+- [x] Editable topics list; `GroundingService` over Ollama `web_search`/`web_fetch` (Anthropic-native later)
+- [x] Timeline feed; summary1 (~30–50w) + drawer summary2 (~150–300w) + sources; auto story number + normalized interest label; dedup + freshness (no stale general knowledge) — built, wired, installed
 
 ## Phase 3 — Factscroll — needs Unsplash access key from user
 

@@ -34,6 +34,8 @@ struct RootView: View {
         switch feature {
         case .inbox:
             InboxView(store: store)
+        case .news:
+            NewsView(store: store)
         default:
             feature.rootView
         }
