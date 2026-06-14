@@ -203,6 +203,59 @@ final class AnthropicProvider: ChatProvider {
         return LLMRound(stopReason: resolved, toolCalls: toolCalls)
     }
 
+    // MARK: - One-shot completion
+
+    /// Non-streaming request/response over the same /v1/messages endpoint and
+    /// auth, with no tools. Joins the text content blocks. Thinking/effort are
+    /// gated to the models that accept them, exactly as `runRound` does.
+    /// Independent of the streaming `start`/`runRound` state above.
+    func complete(systemPrompt: String, userText: String, model: String) async throws -> String {
+        let key = KeychainHelper.load(provider: .claude) ?? ""
+        let supportsThinkingEffort = (model == "claude-opus-4-8" || model == "claude-sonnet-4-6")
+
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 300
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(key, forHTTPHeaderField: "x-api-key")
+        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+
+        var body: [String: Any] = [
+            "model": model,
+            "max_tokens": 16000,
+            "stream": false,
+            "system": systemPrompt,
+            "messages": [["role": "user", "content": userText]],
+        ]
+        if supportsThinkingEffort {
+            body["thinking"] = ["type": "adaptive"]
+            body["output_config"] = ["effort": "high"]
+        }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw CoachError(message: "Invalid response from the API.")
+        }
+        guard http.statusCode == 200 else {
+            let errorBody = String(data: data, encoding: .utf8) ?? ""
+            throw CoachError(message: Self.apiErrorMessage(from: errorBody, status: http.statusCode))
+        }
+
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw CoachError(message: "The API returned an unreadable response.")
+        }
+        if let error = object["error"] as? [String: Any] {
+            throw CoachError(message: (error["message"] as? String) ?? "The API returned an error.")
+        }
+        let blocks = (object["content"] as? [[String: Any]]) ?? []
+        let text = blocks
+            .filter { ($0["type"] as? String) == "text" }
+            .compactMap { $0["text"] as? String }
+            .joined()
+        return text
+    }
+
     private static func apiErrorMessage(from body: String, status: Int) -> String {
         if let data = body.data(using: .utf8),
            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],

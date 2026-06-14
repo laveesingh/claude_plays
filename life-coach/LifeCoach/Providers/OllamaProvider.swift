@@ -110,6 +110,49 @@ final class OllamaProvider: ChatProvider {
         return LLMRound(stopReason: stopReason, toolCalls: toolCalls)
     }
 
+    // MARK: - One-shot completion
+
+    /// Non-streaming request/response over the same /api/chat endpoint and Bearer
+    /// auth, with no tools. Reads `message.content` from the single JSON object.
+    /// Independent of the streaming `start`/`runRound` state above.
+    func complete(systemPrompt: String, userText: String, model: String) async throws -> String {
+        let key = KeychainHelper.load(provider: .ollama) ?? ""
+
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 300
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+
+        let body: [String: Any] = [
+            "model": model,
+            "messages": [
+                ["role": "system", "content": systemPrompt],
+                ["role": "user", "content": userText],
+            ],
+            "stream": false,
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw CoachError(message: "Invalid response from Ollama.")
+        }
+        guard http.statusCode == 200 else {
+            let errorBody = String(data: data, encoding: .utf8) ?? ""
+            throw CoachError(message: Self.errorMessage(from: errorBody, status: http.statusCode))
+        }
+
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw CoachError(message: "Ollama returned an unreadable response.")
+        }
+        if let error = object["error"] as? String {
+            throw CoachError(message: error)
+        }
+        let content = (object["message"] as? [String: Any])?["content"] as? String
+        return content ?? ""
+    }
+
     // MARK: - Helpers
 
     /// Anthropic-style tool def -> OpenAI/Ollama function tool.

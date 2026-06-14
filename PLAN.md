@@ -25,9 +25,10 @@ phase. Test gate at each phase boundary. Bundle id stays `com.laveesingh.LifeCoa
 
 ## Phase 1 — Inbox (Gmail) — needs Google OAuth client id from user
 
-- [ ] (expand at phase start) Google Sign-In + Gmail API `gmail.readonly`; pull inbox last 2 days
-- [ ] Importance classifier (Action/Human/Money/Security) via `ChatProvider`; reasons + badges
-- [ ] Needs-attention rich cards (2–3 line AI summary) + everything-else compact rows (1 line); in-app reading drawer + `googlegmail://` deep link; cache + ~30-min stale background refresh
+- [x] Inbox data+AI layer: `EmailMessage`/`EmailThread` models; `EmailService` protocol + `MockEmailService`; one-shot `complete()` added to `ChatProvider` + both providers; batched importance classifier (important + category Action/Human/Money/Security + reason + length-aware summary) → structured JSON; `FileStore` cache  *(unblocked)*
+- [ ] Inbox UI: Needs-attention rich cards (2–3 line summary, colored badge, unread dot, sender·time·subject·snippet, reason) + Everything-else compact rows (1-line summary); reading drawer (in-app body + summary + "Open in Gmail" `googlegmail://`); header (total/unread counts, last-updated, Refresh); replace placeholder  *(unblocked, against mock)*
+- [ ] Live Gmail wiring: GoogleSignIn SPM + reversed-client-id URL scheme; `GmailService` (`gmail.readonly`, inbox, last 2 days) implementing `EmailService`; Settings connect/disconnect; swap Mock→live; cache + ~30-min stale background refresh  *(BLOCKED on user's OAuth client id)*
+- [ ] Build + install + **user test gate**
 
 ## Phase 2 — News — builds shared GroundingService
 

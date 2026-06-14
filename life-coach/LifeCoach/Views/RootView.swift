@@ -14,7 +14,7 @@ struct RootView: View {
         } else {
             TabView(selection: $router.selectedTab) {
                 ForEach(AppFeature.allCases) { feature in
-                    feature.rootView
+                    tabRoot(feature)
                         .tabItem { Label(feature.title, systemImage: feature.systemImage) }
                         .tag(feature)
                 }
@@ -22,6 +22,20 @@ struct RootView: View {
             .sheet(isPresented: $router.showSettings) {
                 SettingsView()
             }
+        }
+    }
+
+    /// Most tabs render `AppFeature.rootView` directly. The Inbox is the one
+    /// exception: its `InboxStore` must be constructed with the `AppStore`, which
+    /// `@EnvironmentObject` can't supply inside `InboxView.init` — so RootView
+    /// (which already holds the store) builds it here and passes it in.
+    @ViewBuilder
+    private func tabRoot(_ feature: AppFeature) -> some View {
+        switch feature {
+        case .inbox:
+            InboxView(store: store)
+        default:
+            feature.rootView
         }
     }
 }
