@@ -25,13 +25,16 @@ struct RootView: View {
         }
     }
 
-    /// Most tabs render `AppFeature.rootView` directly. The Inbox is the one
-    /// exception: its `InboxStore` must be constructed with the `AppStore`, which
-    /// `@EnvironmentObject` can't supply inside `InboxView.init` — so RootView
-    /// (which already holds the store) builds it here and passes it in.
+    /// Most tabs render `AppFeature.rootView` directly. The feature tabs (and Home,
+    /// whose glance cards read the feature caches) are the exception: their stores
+    /// must be constructed with the `AppStore`, which `@EnvironmentObject` can't
+    /// supply inside `init` — so RootView (which already holds the store) builds
+    /// them here and passes it in.
     @ViewBuilder
     private func tabRoot(_ feature: AppFeature) -> some View {
         switch feature {
+        case .home:
+            HomeView(store: store)
         case .inbox:
             InboxView(store: store)
         case .news:

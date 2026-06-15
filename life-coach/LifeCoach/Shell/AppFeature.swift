@@ -37,7 +37,9 @@ enum AppFeature: String, CaseIterable, Identifiable, Hashable {
     var rootView: some View {
         switch self {
         case .home:
-            HomeView()
+            // Home is always built by RootView.tabRoot via HomeView(store:) so its
+            // glance cards can read the feature caches; this branch is unreachable.
+            EmptyView()
         case .coach:
             CoachHomeView()
         case .inbox:
