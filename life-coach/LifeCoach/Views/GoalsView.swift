@@ -7,8 +7,9 @@ struct GoalsView: View {
     var body: some View {
         List {
             if store.state.goals.isEmpty {
-                Text("No goals yet. Add one - your coach can't push you toward nothing.")
+                Text("No goals yet. Add one — your coach can't push you toward nothing.")
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             ForEach(store.state.goals) { goal in
                 NavigationLink {
@@ -25,6 +26,7 @@ struct GoalsView: View {
             } label: {
                 Image(systemName: "plus")
             }
+            .accessibilityLabel("Add goal")
         }
         .sheet(isPresented: $showingAddGoal) {
             AddGoalSheet()
@@ -37,11 +39,13 @@ struct GoalRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack {
+            HStack(alignment: .firstTextBaseline) {
                 Image(systemName: goal.category.icon)
                     .foregroundStyle(.tint)
                 Text(goal.title)
                     .font(.headline)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             ProgressView(value: goal.progressPercent, total: 100)
             HStack {
@@ -57,6 +61,7 @@ struct GoalRow: View {
                 Text("This week: \(target)")
                     .font(.caption)
                     .foregroundStyle(.tint)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(.vertical, 4)
@@ -76,11 +81,14 @@ struct GoalDetailView: View {
         List {
             Section {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(current.title).font(.headline)
+                    Text(current.title)
+                        .font(.headline)
+                        .fixedSize(horizontal: false, vertical: true)
                     if !current.why.isEmpty {
                         Text("Why: \(current.why)")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     ProgressView(value: current.progressPercent, total: 100)
                     Text("\(Int(current.progressPercent))% complete")
@@ -90,6 +98,7 @@ struct GoalDetailView: View {
                         Text("This week's target: \(target)")
                             .font(.caption.weight(.medium))
                             .foregroundStyle(.tint)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 .padding(.vertical, 4)
@@ -98,14 +107,16 @@ struct GoalDetailView: View {
                 if current.milestones.isEmpty {
                     Text("The coach breaks this goal into deadlined milestones during intake.")
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 } else {
                     ForEach(current.milestones) { milestone in
-                        HStack {
+                        HStack(alignment: .firstTextBaseline) {
                             Image(systemName: milestone.isDone ? "checkmark.circle.fill" : "circle")
                                 .foregroundStyle(milestone.isDone ? Color.green : Color.secondary)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(milestone.title)
                                     .strikethrough(milestone.isDone)
+                                    .fixedSize(horizontal: false, vertical: true)
                                 if let deadline = milestone.deadline {
                                     Text("Due \(deadline, style: .date)")
                                         .font(.caption)
@@ -120,10 +131,12 @@ struct GoalDetailView: View {
                 if current.progressNotes.isEmpty {
                     Text("Nothing logged yet. Report progress to your coach and it lands here.")
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 } else {
                     ForEach(current.progressNotes.reversed()) { note in
                         VStack(alignment: .leading, spacing: 2) {
                             Text(note.note)
+                                .fixedSize(horizontal: false, vertical: true)
                             Text(note.date, style: .date)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)

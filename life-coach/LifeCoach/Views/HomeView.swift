@@ -57,9 +57,12 @@ struct HomeView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Sapiod")
                 .font(.largeTitle.weight(.bold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
             Text(greeting)
                 .font(.title3)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -126,6 +129,8 @@ struct HomeView: View {
                             Text(block.title)
                                 .font(.subheadline.weight(.medium))
                                 .foregroundStyle(.primary)
+                                .lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
                             Text("\(block.timeRangeLabel)\(isGlanceOverdue ? " · overdue" : "")")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -136,6 +141,7 @@ struct HomeView: View {
                     Text("No blocks scheduled. Open the coach to timebox your day.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
@@ -144,6 +150,7 @@ struct HomeView: View {
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("Today. \(store.streak) day streak. Opens the coach's day view.")
     }
 
     // MARK: - Feature glances
@@ -188,10 +195,12 @@ struct HomeView: View {
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
+                        .truncationMode(.tail)
                     Text(top.email.subject)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                        .truncationMode(.tail)
                     if totalUnread > 0 {
                         Text(unreadSummary)
                             .font(.caption2)
@@ -313,6 +322,9 @@ struct HomeView: View {
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
         .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(trailing.map { "\(title), \($0)" } ?? title)
+        .accessibilityHint("Opens \(title)")
     }
 
     private func glanceBody(_ text: String) -> some View {

@@ -28,6 +28,8 @@ struct ChatView: View {
                 Text(error)
                     .font(.caption)
                     .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal)
                     .padding(.bottom, 4)
             }
@@ -127,10 +129,12 @@ struct ChatView: View {
                 .foregroundStyle(.secondary)
             Text("Your coach is on the clock.")
                 .font(.headline)
+                .multilineTextAlignment(.center)
             Text("Start a morning check-in from the Today tab, or just say what's on your mind.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.top, 80)
         .padding(.horizontal, 32)
@@ -179,6 +183,7 @@ struct ChatView: View {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.title2)
             }
+            .accessibilityLabel("Send")
             .disabled(engine.isResponding || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
         .padding(.horizontal)

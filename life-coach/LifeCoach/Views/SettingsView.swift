@@ -44,6 +44,7 @@ struct SettingsView: View {
             Text(intensityBinding.wrappedValue.summary)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -79,6 +80,7 @@ struct SettingsView: View {
             Text("Weekly review pings every Sunday. Block check-ins are scheduled automatically with each day's plan.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

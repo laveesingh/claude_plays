@@ -116,6 +116,7 @@ struct TodayView: View {
             if store.today.blocks.isEmpty {
                 Text("No schedule yet. Run the morning brief and your coach will timebox your day.")
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             } else {
                 ForEach(store.today.blocks) { block in
                     BlockRow(block: block) {
@@ -138,6 +139,7 @@ struct TodayView: View {
             if scheduledToday.isEmpty {
                 Text("No habits yet — the coach sets these during intake.")
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             } else {
                 ForEach(scheduledToday) { habit in
                     Button {
@@ -149,6 +151,7 @@ struct TodayView: View {
                                 .foregroundStyle(store.habitDoneToday(habit.id) ? Color.green : Color.secondary)
                             VStack(alignment: .leading) {
                                 Text(habit.title)
+                                    .fixedSize(horizontal: false, vertical: true)
                                 let adherence = store.habitAdherence(habit)
                                 Text("\(habit.scheduleLabel) · \(adherence.done)/\(adherence.scheduled) last 14 days")
                                     .font(.caption)
@@ -208,6 +211,7 @@ struct BlockRow: View {
                     Text(block.title)
                         .strikethrough(block.status == .done)
                         .foregroundStyle(block.status == .done ? .secondary : .primary)
+                        .fixedSize(horizontal: false, vertical: true)
                     Text(block.status.label)
                         .font(.caption2)
                         .foregroundStyle(statusColor)
