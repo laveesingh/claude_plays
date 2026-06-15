@@ -1,12 +1,14 @@
 import Foundation
 
-/// Dedup heuristics for facts.
+/// Token-overlap dedup — now the **fallback layer** beneath the embedding
+/// pipeline in `FactscrollStore`. The primary dedup is (1) exact canonical
+/// `claim_key` match, then (2) semantic cosine over on-device `NLEmbedding`
+/// vectors. This token-overlap check is used only when `EmbeddingService` can't
+/// produce a vector for a fact (so dedup is never silently disabled).
 ///
-/// **v1 — to be refined after a brainstorm.** The #1 known failure mode is the
-/// model re-emitting the *same* fact disguised in different words ("Octopuses
-/// have three hearts" vs "An octopus has a trio of hearts"). This helper attacks
-/// that two ways, both intentionally simple and modular so we can swap in a
-/// smarter scheme (embeddings, claim extraction, an LLM judge) later:
+/// The #1 known failure mode is the model re-emitting the *same* fact disguised
+/// in different words ("Octopuses have three hearts" vs "An octopus has a trio
+/// of hearts"). The fallback attacks that two ways:
 ///
 ///   1. A normalized `signature` per fact — lowercased, stop-words stripped,
 ///      significant tokens sorted & de-duplicated, joined. Identical claims with
@@ -14,10 +16,6 @@ import Foundation
 ///   2. A token-overlap (Jaccard) check between a candidate's significant tokens
 ///      and every recent signature's tokens; anything above `jaccardThreshold`
 ///      (~0.6) is treated as a near-duplicate and dropped.
-///
-/// The persisted `seenSignatures` ledger (most-recent-first) is both the dedup
-/// memory AND what we feed back into the next generation prompt so the model is
-/// told, explicitly, not to repeat or rephrase those claims.
 enum FactDedup {
     /// Jaccard token-overlap above this counts as a near-duplicate. v1 value.
     static let jaccardThreshold = 0.6
