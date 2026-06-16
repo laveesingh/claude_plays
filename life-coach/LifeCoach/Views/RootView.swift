@@ -12,7 +12,7 @@ struct RootView: View {
         if store.state.profile == nil {
             OnboardingView()
         } else {
-            TabView(selection: $router.selectedTab) {
+            TabView(selection: tabSelection) {
                 ForEach(AppFeature.allCases) { feature in
                     tabRoot(feature)
                         .tabItem { Label(feature.title, systemImage: feature.systemImage) }
@@ -23,6 +23,13 @@ struct RootView: View {
                 SettingsView()
             }
         }
+    }
+
+    /// Routes tab changes through `router.selectTab` so a re-tap of the active tab
+    /// is detected (Factscroll turns it into "jump to newest" instead of the
+    /// default "scroll to top").
+    private var tabSelection: Binding<AppFeature> {
+        Binding(get: { router.selectedTab }, set: { router.selectTab($0) })
     }
 
     /// Most tabs render `AppFeature.rootView` directly. The feature tabs (and Home,

@@ -13,10 +13,14 @@ import SwiftUI
 /// `.scrollPosition(id:)` to track which slide is visible (which drives buffering).
 struct FactscrollView: View {
     @StateObject private var store: FactscrollStore
+    @EnvironmentObject private var router: Router
 
     /// The id of the slide currently snapped into view. `nil` until the first
     /// slide settles. Drives buffer top-ups.
     @State private var visibleID: FeedSlide.ID?
+
+    /// One-shot guard so we only auto-position the feed once per view lifetime.
+    @State private var didInitialPosition = false
 
     init(store: AppStore) {
         _store = StateObject(wrappedValue: FactscrollStore(store: store))
@@ -43,7 +47,27 @@ struct FactscrollView: View {
         // Hide nav chrome for an immersive, full-bleed feel.
         .toolbar(.hidden, for: .navigationBar)
         .statusBarHidden(true)
-        .task { await store.loadInitialIfNeeded() }
+        .task {
+            // Position BEFORE topping up: if we opened with a backlog of already-
+            // seen facts (a returning user), jump straight to the newest one so the
+            // very next scroll is fresh content — not a long climb past old facts.
+            // A first-ever open (no cache) leaves the feed at the top, where every
+            // fact is new.
+            if !didInitialPosition {
+                didInitialPosition = true
+                if let newest = store.facts.last?.id.uuidString {
+                    visibleID = newest
+                }
+            }
+            await store.loadInitialIfNeeded()
+        }
+        // Re-tapping the Factscroll tab takes the user to the newest fact (the
+        // bottom of the barrel), repurposing the default "scroll to top".
+        .onChange(of: router.factscrollResetToken) { _, _ in
+            if let newest = store.facts.last?.id.uuidString {
+                visibleID = newest
+            }
+        }
     }
 
     @ViewBuilder
@@ -159,24 +183,45 @@ private struct FactSlide: View {
     private var background: some View {
         if let image {
             ZStack {
+                // The topic gradient is always present: it's the base, the photo's
+                // load placeholder, and the fallback if there's no photo / it fails.
                 LinearGradient(
                     colors: [image.startColor.color, image.endColor.color],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 )
-                // The SF Symbol motif, drawn faint and oversized as texture.
-                // TODO: once UnsplashImageService lands, an AsyncImage(url:) layered
-                // here (with this gradient as its placeholder) is the only change.
-                if let symbol = image.symbol {
-                    Image(systemName: symbol)
-                        .font(.system(size: 280))
-                        .foregroundStyle(.white.opacity(0.08))
-                        .rotationEffect(.degrees(-12))
-                        .offset(x: 90, y: -120)
+                if let remote = image.remoteURL {
+                    // Real Unsplash photo, full-bleed over the gradient.
+                    AsyncImage(url: remote) { phase in
+                        switch phase {
+                        case .success(let photo):
+                            photo.resizable().scaledToFill()
+                        case .empty, .failure:
+                            symbolMotif(image.symbol)
+                        @unknown default:
+                            symbolMotif(image.symbol)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    // No network image — the faint SF Symbol motif is the texture.
+                    symbolMotif(image.symbol)
                 }
             }
         } else {
             Color.black
+        }
+    }
+
+    /// The faint, oversized SF Symbol drawn as texture when there's no photo.
+    @ViewBuilder
+    private func symbolMotif(_ symbol: String?) -> some View {
+        if let symbol {
+            Image(systemName: symbol)
+                .font(.system(size: 280))
+                .foregroundStyle(.white.opacity(0.08))
+                .rotationEffect(.degrees(-12))
+                .offset(x: 90, y: -120)
         }
     }
 

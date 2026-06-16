@@ -33,7 +33,11 @@ final class FactscrollStore: ObservableObject {
     @Published private(set) var lastLoadFailed = false
 
     private let generator: FactGenerator
-    private let imageService: FactImageService
+    /// Test/preview override. When nil, `imageService` resolves live from whether
+    /// an Unsplash key is present, so adding the key lights up real photos.
+    private let overrideImageService: FactImageService?
+    private let unsplashService = UnsplashImageService()
+    private let mockImageService = MockFactImageService()
     private let fileStore = FileStore<Persisted>(filename: "factscroll.json")
     private let embeddings = EmbeddingService.shared
 
@@ -119,9 +123,9 @@ final class FactscrollStore: ObservableObject {
     private var taste: TasteEngine
 
     init(store: AppStore,
-         imageService: FactImageService = MockFactImageService()) {
+         imageService: FactImageService? = nil) {
         self.generator = FactGenerator(store: store)
-        self.imageService = imageService
+        self.overrideImageService = imageService
 
         let cached = fileStore.load(default: Persisted())
         facts = cached.facts
@@ -320,6 +324,14 @@ final class FactscrollStore: ObservableObject {
         let image = await imageService.cover(for: fact.topic)
         imageCache[fact.topic] = image
         return image
+    }
+
+    /// The active image source: a test override if injected, else Unsplash when a
+    /// key is set, else the no-network gradient mock. Resolved per call so adding
+    /// the key in Settings lights up real photos for any not-yet-cached topic.
+    private var imageService: FactImageService {
+        if let overrideImageService { return overrideImageService }
+        return KeychainHelper.hasKey(secret: .unsplash) ? unsplashService : mockImageService
     }
 
     // MARK: - Persistence

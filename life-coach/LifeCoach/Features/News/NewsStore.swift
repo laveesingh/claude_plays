@@ -29,8 +29,9 @@ final class NewsStore: ObservableObject {
     /// changes once assigned.
     private var topicLabels: [String: String] = [:]
 
-    /// How many search hits per topic feed the model.
-    private static let resultsPerTopic = 6
+    /// How many search hits per topic feed the model. Set to the provider ceiling
+    /// so each refresh has the widest possible pool of fresh material to surface.
+    private static let resultsPerTopic = 10
 
     /// The on-disk shape - everything the spec asks us to persist.
     private struct Cache: Codable {
@@ -156,12 +157,18 @@ final class NewsStore: ObservableObject {
             }
             guard !results.isEmpty else { continue }
 
+            // Extract a real publication date per result up front (the search API
+            // gives us none). This both feeds the model a reliable date to copy
+            // and backstops a story whose date the model leaves null.
+            let resultDates = Self.extractDates(from: results)
+
             let raw: String
             do {
                 raw = try await provider.complete(
                     systemPrompt: Self.systemPrompt,
                     userText: Self.buildUserPayload(topic: topic,
                                                     results: results,
+                                                    resultDates: resultDates,
                                                     seenHeadlines: seenHeadlines(for: topic)),
                     model: model
                 )
@@ -170,12 +177,15 @@ final class NewsStore: ObservableObject {
             }
 
             let drafts = Self.parseStories(raw)
-            let allowedURLs = Set(results.map { $0.url })
+            // url -> normalized url, so a trailing-slash/case nudge from the model
+            // can't strip a valid citation (and drop an otherwise-good story).
+            let allowed = Self.allowedURLMap(results)
 
             for draft in drafts {
                 guard let story = makeStory(from: draft,
                                             topic: topic,
-                                            allowedURLs: allowedURLs) else { continue }
+                                            allowed: allowed,
+                                            resultDates: resultDates) else { continue }
                 seenSignatures.insert(story.signature)
                 stories.insert(story, at: 0) // newest-first
                 didChange = true
@@ -198,19 +208,30 @@ final class NewsStore: ObservableObject {
     /// from the provided results, and a signature not already seen.
     private func makeStory(from draft: StoryDraft,
                            topic: Topic,
-                           allowedURLs: Set<String>) -> NewsStory? {
+                           allowed: [String: String],
+                           resultDates: [String: Date]) -> NewsStory? {
         let headline = draft.headline.trimmingCharacters(in: .whitespacesAndNewlines)
         let summary1 = draft.summary1.trimmingCharacters(in: .whitespacesAndNewlines)
         let summary2 = draft.summary2.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !headline.isEmpty, !summary1.isEmpty, !summary2.isEmpty else { return nil }
 
-        // Keep only sources that point at a URL we actually provided - never let
-        // the model invent a citation.
-        let sources = draft.sources.filter { allowedURLs.contains($0.url) }
+        // Keep only sources that resolve to a URL we actually provided - never let
+        // the model invent a citation - but match tolerantly (trailing slash, case
+        // in the host) and snap the source back to OUR exact url so it opens.
+        let sources: [NewsSource] = draft.sources.compactMap { source in
+            guard let canonical = allowed[Self.normalizeURL(source.url)] else { return nil }
+            return NewsSource(title: source.title, url: canonical)
+        }
         guard !sources.isEmpty else { return nil }
 
         let signature = NewsStory.makeSignature(headline)
         guard !signature.isEmpty, !seenSignatures.contains(signature) else { return nil }
+
+        // Date: trust the model when it gave one; otherwise fall back to the most
+        // recent extracted date among the cited sources (NOT the fetch time). Only
+        // when no source yields a date does `displayDate` fall back to fetch time.
+        let publishedDate = draft.publishedDate
+            ?? sources.compactMap { resultDates[$0.url] }.max()
 
         storyCounter += 1
         return NewsStory(storyNumber: storyCounter,
@@ -219,8 +240,46 @@ final class NewsStore: ObservableObject {
                          summary1: summary1,
                          summary2: summary2,
                          sources: sources,
-                         publishedDate: draft.publishedDate,
+                         publishedDate: publishedDate,
                          signature: signature)
+    }
+
+    /// Per-result extracted publication date, keyed by the result's exact url.
+    private static func extractDates(from results: [WebResult]) -> [String: Date] {
+        var map: [String: Date] = [:]
+        for result in results {
+            if let date = DateExtractor.date(title: result.title, url: result.url, content: result.content) {
+                map[result.url] = date
+            }
+        }
+        return map
+    }
+
+    /// Map of normalized url -> the exact provided url, so a model citation that
+    /// differs only by a trailing slash or host case still resolves to a real
+    /// source rather than being silently dropped.
+    private static func allowedURLMap(_ results: [WebResult]) -> [String: String] {
+        var map: [String: String] = [:]
+        for result in results { map[normalizeURL(result.url)] = result.url }
+        return map
+    }
+
+    /// Normalize a url for tolerant matching: lowercase scheme+host, drop a single
+    /// trailing slash, drop a leading "www.". Path case is preserved (paths are
+    /// case-sensitive).
+    private static func normalizeURL(_ raw: String) -> String {
+        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let hashIndex = s.firstIndex(of: "#") { s = String(s[..<hashIndex]) }
+        guard let comps = URLComponents(string: s), let host = comps.host else {
+            return s.lowercased()
+        }
+        let scheme = (comps.scheme ?? "https").lowercased()
+        var h = host.lowercased()
+        if h.hasPrefix("www.") { h = String(h.dropFirst(4)) }
+        var path = comps.path
+        if path.count > 1, path.hasSuffix("/") { path = String(path.dropLast()) }
+        let query = comps.query.map { "?\($0)" } ?? ""
+        return "\(scheme)://\(h)\(path)\(query)"
     }
 
     // MARK: - Persistence
@@ -242,12 +301,16 @@ final class NewsStore: ObservableObject {
     /// the model knows exactly what it may cite and what it must not repeat.
     private static func buildUserPayload(topic: Topic,
                                          results: [WebResult],
+                                         resultDates: [String: Date],
                                          seenHeadlines: [String]) -> String {
         let resultBlocks = results.enumerated().map { index, result -> String in
-            """
+            let dateLine = resultDates[result.url].map { "date: \(DateExtractor.dayFormatter.string(from: $0))" }
+                ?? "date: unknown"
+            return """
             [\(index + 1)]
             title: \(result.title)
             url: \(result.url)
+            \(dateLine)
             content: \(result.content)
             """
         }.joined(separator: "\n\n")
@@ -282,15 +345,15 @@ final class NewsStore: ObservableObject {
     HARD RULES - follow every one:
     1. Use ONLY the facts present in the provided search results. NEVER add information from your own knowledge, and NEVER invent or guess facts, numbers, quotes, dates, or sources. If the results do not say it, it does not exist.
     2. CLUSTER results that cover the same underlying event or development into a SINGLE story, and MERGE their information into one coherent account. Multiple articles about one event = one story, not many.
-    3. Return ONLY genuinely NEW stories. If a story is about the same event as one of the ALREADY-SEEN headlines, OMIT it entirely. When in doubt that it is a duplicate, omit it.
+    3. Omit a story ONLY when it clearly covers the SAME event as one of the ALREADY-SEEN headlines. A genuinely distinct development, a new angle, a follow-up, or a different event in the same topic is NOT a duplicate — INCLUDE it. Lean toward surfacing news: when a story is plausibly new and substantive, return it. Do not drop a fresh story just because it shares the topic with something seen.
     4. Every story MUST cite at least one source, and EVERY source you cite must be one of the provided results - copy its url and title EXACTLY as given. Do not cite a url that is not in the results.
-    5. If the results contain nothing new and substantive for this topic, return an empty array [].
+    5. Return an empty array [] only when EVERY result is a duplicate of an already-seen headline or none is substantive. Several distinct stories in the results should yield several stories here.
 
     For each new story produce:
     - "headline": a clear, specific, factual headline (no clickbait, no editorializing).
     - "summary1": roughly 30-50 words - a tight lede that captures the core of the story at a glance.
     - "summary2": roughly 150-300 words - the full essential understanding of the story: what happened, who is involved, why it matters, and the key specifics. Dense and factual, no fluff, no filler, no repetition of the headline.
-    - "date": the story's publication / event date as "YYYY-MM-DD" if the results state it or clearly imply it (e.g. "Monday", "yesterday", an explicit date in the content); otherwise null. NEVER guess a date - if it isn't supported by the results, use null.
+    - "date": the story's publication date as "YYYY-MM-DD". Each result above carries a "date:" line we extracted for you — use the date of the result(s) you clustered into this story, taking the MOST RECENT one when they differ. Only if every clustered result says "date: unknown" (and the content states no date) may you use null. Do not invent a date, but DO copy the provided one.
     - "sources": an array of the results this story is drawn from, each with "title" and "url" copied exactly from the provided results.
 
     Return ONLY a JSON array, no prose and no markdown code fences. Each element has exactly these keys:

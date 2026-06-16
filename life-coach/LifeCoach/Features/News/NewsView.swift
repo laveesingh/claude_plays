@@ -238,6 +238,9 @@ private struct StoryCard: View {
                     .foregroundStyle(.secondary)
                 InterestBadge(label: story.interestLabel)
                 Spacer(minLength: 0)
+                Text(NewsFormat.day(story.displayDate))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
 
             Text(story.headline)

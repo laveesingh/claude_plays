@@ -12,6 +12,7 @@ struct SettingsView: View {
                 aiSection
                 APIKeyField(provider: .ollama)
                 APIKeyField(provider: .claude)
+                UnsplashKeyField()
                 coachSection
                 integrationsSection
                 scheduleSection
@@ -213,6 +214,51 @@ private struct APIKeyField: View {
             Text(provider.keyLabel)
         } footer: {
             Text(provider.keyFooter)
+        }
+    }
+}
+
+/// Unsplash access-key entry — same edit-protected pattern as `APIKeyField`, but
+/// backed by the Keychain's named-secret store. When set, Factscroll pulls real
+/// cover photos for each fact's topic; with no key it falls back to gradients.
+private struct UnsplashKeyField: View {
+    @State private var editing = false
+    @State private var draft = ""
+
+    var body: some View {
+        Section {
+            if editing {
+                SecureField("Unsplash Access Key", text: $draft)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                HStack {
+                    Button("Save") {
+                        KeychainHelper.save(draft.trimmingCharacters(in: .whitespacesAndNewlines),
+                                            secret: .unsplash)
+                        editing = false
+                    }
+                    Spacer()
+                    Button("Cancel", role: .cancel) {
+                        editing = false
+                        draft = ""
+                    }
+                }
+            } else {
+                HStack {
+                    Label(KeychainHelper.hasKey(secret: .unsplash) ? "Key saved" : "No key set",
+                          systemImage: KeychainHelper.hasKey(secret: .unsplash) ? "checkmark.seal.fill" : "photo")
+                        .foregroundStyle(KeychainHelper.hasKey(secret: .unsplash) ? Color.secondary : Color.orange)
+                    Spacer()
+                    Button("Edit") {
+                        draft = KeychainHelper.load(secret: .unsplash) ?? ""
+                        editing = true
+                    }
+                }
+            }
+        } header: {
+            Text("Unsplash (Factscroll photos)")
+        } footer: {
+            Text("Gives Factscroll real cover photos per topic. Create a free key at unsplash.com/developers → New Application → Access Key. Stored only in this device's Keychain. Takes effect on next launch.")
         }
     }
 }
