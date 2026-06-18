@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import AuthenticationServices
 
 /// The Inbox tab. AI-triaged Gmail: a "Needs your attention" section of rich
 /// cards for important mail, an "Everything else" section of compact rows, and a
@@ -8,12 +9,17 @@ import UIKit
 /// `@EnvironmentObject` inside `init`), `RootView` hands the store in explicitly.
 struct InboxView: View {
     @StateObject private var inbox: InboxStore
+    @EnvironmentObject private var googleAuth: GoogleAuth
 
     /// The message the reading drawer is showing, if any.
     @State private var reading: ClassifiedEmail?
 
     /// Auto-refresh on first appear is one-shot.
     @State private var didAutoRefresh = false
+
+    /// Gmail connect flow state.
+    @State private var connecting = false
+    @State private var authError: String?
 
     /// A cache older than this on first appear triggers an automatic refresh.
     private static let staleAfter: TimeInterval = 30 * 60
@@ -31,6 +37,12 @@ struct InboxView: View {
         .sheet(item: $reading) { item in
             ReadingDrawer(classified: item)
         }
+        .alert("Couldn't connect Gmail",
+               isPresented: Binding(get: { authError != nil }, set: { if !$0 { authError = nil } })) {
+            Button("OK", role: .cancel) { authError = nil }
+        } message: {
+            Text(authError ?? "")
+        }
         .task { await autoRefreshIfNeeded() }
     }
 
@@ -38,7 +50,9 @@ struct InboxView: View {
 
     @ViewBuilder
     private var content: some View {
-        if inbox.emails.isEmpty {
+        if !googleAuth.isSignedIn {
+            connectState
+        } else if inbox.emails.isEmpty {
             if inbox.isRefreshing {
                 loadingState
             } else {
@@ -108,6 +122,36 @@ struct InboxView: View {
 
     // MARK: - States
 
+    /// Shown when Gmail isn't connected: a single call-to-action that runs the
+    /// OAuth flow, then refreshes into the live inbox.
+    private var connectState: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "tray.and.arrow.down")
+                .font(.system(size: 52))
+                .foregroundStyle(.secondary)
+            Text("Connect your Gmail")
+                .font(.title3.weight(.semibold))
+            Text("Sapiod triages your last 2 days of mail into what actually needs you — Action, Human, Money, Security — with AI summaries. Read-only access, tokens stay in your device's Keychain.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 36)
+            Button {
+                Task { await connect() }
+            } label: {
+                if connecting {
+                    ProgressView()
+                } else {
+                    Label("Connect Gmail", systemImage: "link")
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(connecting)
+            .padding(.top, 4)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
     private var emptyState: some View {
         VStack(spacing: 14) {
             Image(systemName: "tray")
@@ -158,8 +202,29 @@ struct InboxView: View {
 
     // MARK: - Auto refresh
 
+    /// Run the Gmail OAuth flow, then pull the live inbox on success.
+    private func connect() async {
+        connecting = true
+        defer { connecting = false }
+        do {
+            try await googleAuth.signIn()
+            await inbox.refresh()
+        } catch is CancellationError {
+            // User dismissed the sheet — no error to show.
+        } catch {
+            // ASWebAuthenticationSession cancellation surfaces as a specific code;
+            // treat it as a silent dismissal, surface anything else.
+            let nsError = error as NSError
+            if nsError.domain == ASWebAuthenticationSessionErrorDomain,
+               nsError.code == ASWebAuthenticationSessionError.canceledLogin.rawValue {
+                return
+            }
+            authError = error.localizedDescription
+        }
+    }
+
     private func autoRefreshIfNeeded() async {
-        guard !didAutoRefresh else { return }
+        guard !didAutoRefresh, googleAuth.isSignedIn else { return }
         didAutoRefresh = true
 
         let isStale: Bool

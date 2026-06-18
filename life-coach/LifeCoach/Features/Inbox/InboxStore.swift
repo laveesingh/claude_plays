@@ -11,9 +11,20 @@ final class InboxStore: ObservableObject {
     @Published private(set) var lastUpdated: Date?
     @Published private(set) var isRefreshing = false
 
-    private let service: EmailService
+    /// Test/preview override. When nil, the service resolves live from Gmail
+    /// sign-in state, so connecting Gmail switches the source with no re-init.
+    private let overrideService: EmailService?
+    private let mockService = MockEmailService()
+    private let gmailService = GmailService(auth: .shared)
     private let classifier: InboxClassifier
     private let fileStore = FileStore<Cache>(filename: "inbox-cache.json")
+
+    /// The active source: a test override if injected, else live Gmail when the
+    /// user is connected, else the built-in mock demo inbox.
+    private var service: EmailService {
+        if let overrideService { return overrideService }
+        return GoogleAuth.shared.isSignedIn ? gmailService : mockService
+    }
 
     /// The on-disk shape: the classified emails plus when they were last refreshed.
     private struct Cache: Codable {
@@ -26,8 +37,8 @@ final class InboxStore: ObservableObject {
         }
     }
 
-    init(store: AppStore, service: EmailService = MockEmailService()) {
-        self.service = service
+    init(store: AppStore, service: EmailService? = nil) {
+        self.overrideService = service
         self.classifier = InboxClassifier(store: store)
 
         // Load the last cache instantly so the UI has something to show on launch.

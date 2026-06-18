@@ -25,6 +25,7 @@ struct LifeCoachApp: App {
                 .environmentObject(engine)
                 .environmentObject(router)
                 .environmentObject(settings)
+                .environmentObject(GoogleAuth.shared)
         }
     }
 }

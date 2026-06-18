@@ -1,10 +1,14 @@
 import SwiftUI
+import AuthenticationServices
 
 struct SettingsView: View {
     @EnvironmentObject private var store: AppStore
     @EnvironmentObject private var engine: CoachEngine
+    @EnvironmentObject private var googleAuth: GoogleAuth
 
     @State private var showingResetConfirm = false
+    @State private var connectingGmail = false
+    @State private var gmailError: String?
 
     var body: some View {
         NavigationStack {
@@ -13,12 +17,63 @@ struct SettingsView: View {
                 APIKeyField(provider: .ollama)
                 APIKeyField(provider: .claude)
                 UnsplashKeyField()
+                gmailSection
                 coachSection
                 integrationsSection
                 scheduleSection
                 dangerSection
             }
             .navigationTitle("Settings")
+            .alert("Gmail", isPresented: Binding(get: { gmailError != nil }, set: { if !$0 { gmailError = nil } })) {
+                Button("OK", role: .cancel) { gmailError = nil }
+            } message: {
+                Text(gmailError ?? "")
+            }
+        }
+    }
+
+    private var gmailSection: some View {
+        Section {
+            if googleAuth.isSignedIn {
+                HStack {
+                    Label("Gmail connected", systemImage: "checkmark.seal.fill")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Disconnect", role: .destructive) { googleAuth.signOut() }
+                }
+            } else {
+                Button {
+                    Task { await connectGmail() }
+                } label: {
+                    HStack {
+                        Label("Connect Gmail", systemImage: "link")
+                        if connectingGmail {
+                            Spacer()
+                            ProgressView()
+                        }
+                    }
+                }
+                .disabled(connectingGmail)
+            }
+        } header: {
+            Text("Inbox (Gmail)")
+        } footer: {
+            Text("Read-only access to triage your last 2 days of mail. Tokens are stored only in this device's Keychain; disconnect anytime.")
+        }
+    }
+
+    private func connectGmail() async {
+        connectingGmail = true
+        defer { connectingGmail = false }
+        do {
+            try await googleAuth.signIn()
+        } catch {
+            let nsError = error as NSError
+            if nsError.domain == ASWebAuthenticationSessionErrorDomain,
+               nsError.code == ASWebAuthenticationSessionError.canceledLogin.rawValue {
+                return
+            }
+            gmailError = error.localizedDescription
         }
     }
 

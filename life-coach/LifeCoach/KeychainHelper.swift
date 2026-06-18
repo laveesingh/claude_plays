@@ -8,9 +8,10 @@ import Security
 enum KeychainHelper {
     private static let service = "com.lifecoach.apikey"
 
-    /// Named secrets that aren't an `AIProvider` (image services, etc.).
+    /// Named secrets that aren't an `AIProvider` (image services, OAuth tokens…).
     enum Secret: String, CaseIterable {
         case unsplash
+        case googleTokens
     }
 
     private static func account(for provider: AIProvider) -> String {
