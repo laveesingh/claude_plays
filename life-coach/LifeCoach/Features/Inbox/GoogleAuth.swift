@@ -6,7 +6,13 @@ import UIKit
 /// Google OAuth 2.0 for an installed iOS app: the custom-URI-scheme + PKCE flow
 /// (no client secret), run through `ASWebAuthenticationSession`. Access/refresh
 /// tokens live in the Keychain; access tokens refresh transparently when expired.
-/// Scope is read-only Gmail — enough to triage, summarize, and open in Gmail.
+/// Scope is `gmail.modify` — a SUPERSET of `gmail.readonly`, so it still allows
+/// every read path while also permitting the write actions (mark read, archive,
+/// label) the capability layer needs. Users who consented to the old read-only
+/// scope keep a read-only token until they re-consent; write calls 401/403 until
+/// then, which the UI turns into a "Reconnect Gmail to enable actions" prompt
+/// (the flow already sends `prompt=consent`, so re-running `signIn()` re-requests
+/// with the new scope).
 ///
 /// The OAuth client ID is a PUBLIC identifier (iOS clients have no secret), so it
 /// lives in code; only the resulting tokens are sensitive and they go to the
@@ -23,7 +29,9 @@ final class GoogleAuth: NSObject, ObservableObject {
     private static let reversedClientID =
         "com.googleusercontent.apps.299688744667-f4obpikdc7o82eunl431gbp7ee11iu2m"
     private static var redirectURI: String { "\(reversedClientID):/oauth2redirect" }
-    private static let scope = "https://www.googleapis.com/auth/gmail.readonly"
+    /// `gmail.modify` is a superset of `gmail.readonly`: it keeps full read access
+    /// AND grants the label/archive/read-state writes M2 introduces.
+    private static let scope = "https://www.googleapis.com/auth/gmail.modify"
 
     private static let authEndpoint = URL(string: "https://accounts.google.com/o/oauth2/v2/auth")!
     private static let tokenEndpoint = URL(string: "https://oauth2.googleapis.com/token")!
