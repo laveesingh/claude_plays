@@ -1,18 +1,28 @@
 import Foundation
 
-/// Source of recent inbox email. The classifier and store depend on this
-/// abstraction; `MockEmailService` backs development now, a live `GmailService`
-/// will conform to the same protocol later (Phase 1, live-wiring task).
+/// The result of one inbox fetch: the working set of fully-fetched messages plus
+/// the TRUE count of everything unread (which can be far larger than the working
+/// set). The store leads with the brief over `totalUnread`, but only triages and
+/// renders the messages it actually pulled down.
+struct InboxFetch {
+    let messages: [EmailMessage]
+    let totalUnread: Int
+}
+
+/// Source of inbox email. The classifier and store depend on this abstraction;
+/// `MockEmailService` backs development and the disconnected state, while the
+/// live `GmailService` conforms to the same protocol once Gmail is connected.
 protocol EmailService {
-    /// The user's inbox emails from roughly the last 2 days, newest first.
-    func fetchRecent() async throws -> [EmailMessage]
+    /// The user's unread mail (newest-first working set) plus the total unread
+    /// count across the mailbox.
+    func fetchRecent() async throws -> InboxFetch
 }
 
 /// Deterministic, varied inbox covering every classification path: genuine
 /// Action emails, real Human notes, actual Money movements, a Security alert,
 /// and a clear majority of non-important promotions/newsletters/statements.
 struct MockEmailService: EmailService {
-    func fetchRecent() async throws -> [EmailMessage] {
+    func fetchRecent() async throws -> InboxFetch {
         let now = Date()
         let cal = Calendar.current
 
@@ -381,6 +391,7 @@ struct MockEmailService: EmailService {
             isUnread: true
         ))
 
-        return messages.sorted { $0.date > $1.date }
+        let sorted = messages.sorted { $0.date > $1.date }
+        return InboxFetch(messages: sorted, totalUnread: sorted.count)
     }
 }
