@@ -1,5 +1,6 @@
 import SwiftUI
 import UserNotifications
+import BackgroundTasks
 
 @main
 @MainActor
@@ -16,6 +17,13 @@ struct LifeCoachApp: App {
         NotificationDelegate.shared.store = store
         UNUserNotificationCenter.current().delegate = NotificationDelegate.shared
         NotificationManager.registerCategories()
+
+        // M5: Register the background-refresh handler ONCE, before launch finishes
+        // (iOS crashes on a late or duplicate registration). The handler builds its
+        // own InboxStore from this AppStore when it fires, so background refresh works
+        // even if the user never opens the Inbox tab. Then submit the first request.
+        InboxWatchScheduler.register(appStore: store)
+        InboxWatchScheduler.scheduleNext()
     }
 
     var body: some Scene {
