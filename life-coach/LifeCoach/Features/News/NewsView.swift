@@ -69,10 +69,13 @@ struct NewsView: View {
 
     /// Stories bucketed into newest-first day groups (by their own date, not fetch
     /// time), each bucket sorted newest story first — the data behind the sectioned
-    /// timeline.
+    /// timeline. Filtered to the freshness window: only stories whose `displayDate`
+    /// is within the last `news.freshnessWindow` days are shown.
     private var dayGroups: [(day: Date, stories: [NewsStory])] {
         let cal = Calendar.current
-        return Dictionary(grouping: news.stories) { cal.startOfDay(for: $0.displayDate) }
+        let since = Date().addingTimeInterval(-news.freshnessWindow * 86_400)
+        let visible = news.stories.filter { $0.displayDate >= since }
+        return Dictionary(grouping: visible) { cal.startOfDay(for: $0.displayDate) }
             .map { (day: $0.key, stories: $0.value.sorted {
                 $0.displayDate != $1.displayDate ? $0.displayDate > $1.displayDate
                                                  : $0.storyNumber > $1.storyNumber
@@ -89,6 +92,9 @@ struct NewsView: View {
                     onRefresh: { Task { await news.refresh() } }
                 )
                 .padding(.horizontal)
+
+                FreshnessPicker(window: $news.freshnessWindow)
+                    .padding(.horizontal)
 
                 ForEach(dayGroups, id: \.day) { group in
                     Section {
@@ -225,8 +231,9 @@ private struct NewsHeader: View {
 
 // MARK: - Story card
 
-/// A clean timeline card: header row with "#N", the interest-label badge, and a
-/// relative timestamp; body is the short `summary1`.
+/// A clean timeline card: header row with "#N", the interest-label badge, and an
+/// "as of <date>" stamp; the headline; the outlet line (with an Opinion tag and a
+/// multi-outlet corroboration badge when applicable); then the short `summary1`.
 private struct StoryCard: View {
     let story: NewsStory
 
@@ -238,7 +245,7 @@ private struct StoryCard: View {
                     .foregroundStyle(.secondary)
                 InterestBadge(label: story.interestLabel)
                 Spacer(minLength: 0)
-                Text(NewsFormat.day(story.displayDate))
+                Text("as of \(NewsFormat.day(story.displayDate))")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -248,6 +255,23 @@ private struct StoryCard: View {
                 .foregroundStyle(.primary)
                 .multilineTextAlignment(.leading)
                 .fixedSize(horizontal: false, vertical: true)
+
+            // Outlet line + content-type / corroboration tags.
+            HStack(spacing: 6) {
+                if !story.outlet.isEmpty {
+                    Text(story.outlet)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                if story.contentType == .opinion || story.contentType == .analysis {
+                    OpinionTag(kind: story.contentType)
+                }
+                if story.outletCount > 1 {
+                    OutletCountBadge(count: story.outletCount)
+                }
+                Spacer(minLength: 0)
+            }
 
             Text(story.summary1)
                 .font(.subheadline)
@@ -259,6 +283,61 @@ private struct StoryCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(.secondarySystemBackground))
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+}
+
+// MARK: - Freshness window picker
+
+/// A segmented control over the recency window. Changing it re-filters the visible
+/// timeline (via `NewsView.dayGroups`) and tightens the next refresh's recency
+/// gate. Bound straight to `NewsStore.freshnessWindow`, which persists the choice.
+private struct FreshnessPicker: View {
+    @Binding var window: Double
+
+    var body: some View {
+        Picker("Window", selection: $window) {
+            Text("1d").tag(1.0)
+            Text("3d").tag(3.0)
+            Text("7d").tag(7.0)
+        }
+        .pickerStyle(.segmented)
+        .accessibilityLabel("Freshness window")
+    }
+}
+
+// MARK: - Content-type + corroboration tags
+
+/// A small gray capsule flagging an opinion / analysis story (vs. straight news).
+private struct OpinionTag: View {
+    let kind: NewsContentType
+
+    private var label: String {
+        kind == .analysis ? "Analysis" : "Opinion"
+    }
+
+    var body: some View {
+        Text(label)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2)
+            .background(Color(.tertiarySystemBackground), in: Capsule())
+            .overlay(Capsule().stroke(Color.secondary.opacity(0.25), lineWidth: 1))
+    }
+}
+
+/// A small teal capsule showing how many distinct outlets corroborated a story.
+private struct OutletCountBadge: View {
+    let count: Int
+
+    var body: some View {
+        Text("\(count) outlets")
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.teal)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2)
+            .background(Color.teal.opacity(0.12), in: Capsule())
+            .accessibilityLabel("\(count) outlets reporting")
     }
 }
 
@@ -349,7 +428,7 @@ private struct StoryDrawer: View {
                     .foregroundStyle(.secondary)
                 InterestBadge(label: story.interestLabel)
                 Spacer(minLength: 0)
-                Text(NewsFormat.day(story.displayDate))
+                Text("as of \(NewsFormat.day(story.displayDate))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -357,6 +436,22 @@ private struct StoryDrawer: View {
                 .font(.title3.weight(.semibold))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
+
+            // Outlet + content-type + corroboration, prominent in the drawer header.
+            HStack(spacing: 6) {
+                if !story.outlet.isEmpty {
+                    Text(story.outlet)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+                if story.contentType == .opinion || story.contentType == .analysis {
+                    OpinionTag(kind: story.contentType)
+                }
+                if story.outletCount > 1 {
+                    OutletCountBadge(count: story.outletCount)
+                }
+                Spacer(minLength: 0)
+            }
         }
     }
 

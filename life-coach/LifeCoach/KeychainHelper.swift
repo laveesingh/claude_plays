@@ -12,6 +12,7 @@ enum KeychainHelper {
     enum Secret: String, CaseIterable {
         case unsplash
         case googleTokens
+        case newsDataKey
     }
 
     private static func account(for provider: AIProvider) -> String {
