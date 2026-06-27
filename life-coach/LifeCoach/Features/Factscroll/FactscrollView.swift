@@ -22,6 +22,9 @@ struct FactscrollView: View {
     /// One-shot guard so we only auto-position the feed once per view lifetime.
     @State private var didInitialPosition = false
 
+    /// Whether the "Your taste" panel sheet is presented.
+    @State private var showingTaste = false
+
     init(store: AppStore) {
         _store = StateObject(wrappedValue: FactscrollStore(store: store))
     }
@@ -39,14 +42,34 @@ struct FactscrollView: View {
     }
 
     var body: some View {
-        GeometryReader { _ in
-            content
+        GeometryReader { proxy in
+            content(size: proxy.size)
         }
         .ignoresSafeArea()
         .background(Color.black)
         // Hide nav chrome for an immersive, full-bleed feel.
         .toolbar(.hidden, for: .navigationBar)
         .statusBarHidden(true)
+        // "Your taste" controls button — top-trailing, unobtrusive over the feed.
+        .overlay(alignment: .topTrailing) {
+            Button {
+                showingTaste = true
+            } label: {
+                Image(systemName: "slider.horizontal.3")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 44, height: 44)
+                    .background(.black.opacity(0.28), in: Circle())
+                    .shadow(color: .black.opacity(0.35), radius: 6, y: 2)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Your taste settings")
+            .padding(.top, 56)
+            .padding(.trailing, 16)
+        }
+        .sheet(isPresented: $showingTaste) {
+            FactTasteView(store: store)
+        }
         .task {
             // Position BEFORE topping up: if we opened with a backlog of already-
             // seen facts (a returning user), jump straight to the newest one so the
@@ -71,20 +94,29 @@ struct FactscrollView: View {
     }
 
     @ViewBuilder
-    private var content: some View {
+    private func content(size: CGSize) -> some View {
         if slides.isEmpty {
             FirstLoadView()
         } else {
-            feed
+            feed(size: size)
         }
     }
 
-    private var feed: some View {
+    private func feed(size: CGSize) -> some View {
         ScrollView(.vertical) {
             LazyVStack(spacing: 0) {
                 ForEach(slides) { slide in
-                    slideView(for: slide)
-                        .containerRelativeFrame(.vertical)
+                    slideView(for: slide, size: size)
+                        // Pin each slide to the EXACT measured screen size from the
+                        // outer GeometryReader, then clip. `size` is threaded all the
+                        // way down to the cover photo so every layer is fixed-framed —
+                        // nothing depends on proposal propagation.
+                        .frame(width: size.width, height: size.height)
+                        .clipped()
+                        // TEMP DIAGNOSTIC chip: proves which binary is running and
+                        // whether the measured slide width matches the real screen.
+                        // Remove once the overflow is confirmed fixed.
+                        .overlay(alignment: .topLeading) { diagnosticChip(size: size) }
                         .id(slide.id)
                 }
             }
@@ -109,15 +141,32 @@ struct FactscrollView: View {
     }
 
     @ViewBuilder
-    private func slideView(for slide: FeedSlide) -> some View {
+    private func slideView(for slide: FeedSlide, size: CGSize) -> some View {
         switch slide {
         case .fact(let fact):
-            FactSlide(fact: fact, store: store)
+            FactSlide(fact: fact, store: store, size: size)
         case .shimmer:
             ShimmerSlide()
         case .retry:
             RetrySlide { Task { await store.retry() } }
         }
+    }
+
+    /// Temporary on-slide readout: build number + the GeometryReader-measured slide
+    /// width vs the real screen width. If `w` ≠ `screen`, the size source is wrong;
+    /// if the build number is stale, we're not even running this code.
+    private func diagnosticChip(size: CGSize) -> some View {
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "—"
+        let screen = Int(UIScreen.main.bounds.width)
+        return Text("b\(build) · w\(Int(size.width)) · s\(screen)")
+            .font(.system(size: 10, weight: .bold, design: .monospaced))
+            .foregroundStyle(.yellow)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(.black.opacity(0.65), in: Capsule())
+            .padding(.leading, 14)
+            .padding(.top, 52)
+            .allowsHitTesting(false)
     }
 
     /// Drive the store's buffer policy from the currently-visible fact's index.
@@ -155,6 +204,10 @@ private enum FeedSlide: Identifiable {
 private struct FactSlide: View {
     let fact: Fact
     @ObservedObject var store: FactscrollStore
+    /// The exact slide size, threaded from the feed's GeometryReader so every
+    /// layer (including the cover photo) is fixed-framed rather than relying on
+    /// the layout proposal reaching it intact.
+    let size: CGSize
 
     @State private var image: FactImage?
     @State private var showingNote = false
@@ -166,6 +219,9 @@ private struct FactSlide: View {
             scrim
             foreground
         }
+        // The centring container is itself hard-bounded to the slide, so no
+        // oversized child can shift its siblings off either edge.
+        .frame(width: size.width, height: size.height)
         .clipped()
         .task(id: fact.id) {
             image = await store.cover(for: fact)
@@ -182,16 +238,21 @@ private struct FactSlide: View {
     @ViewBuilder
     private var background: some View {
         if let image {
-            ZStack {
-                // The topic gradient is always present: it's the base, the photo's
-                // load placeholder, and the fallback if there's no photo / it fails.
-                LinearGradient(
-                    colors: [image.startColor.color, image.endColor.color],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
+            // The topic gradient is the SIZE-DEFINING layer (fixed to the slide).
+            // The photo/symbol ride in an `.overlay`, whose size is proposed BY the
+            // gradient and never feeds back up — so `scaledToFill`'s oversize is
+            // contained here and clipped, instead of inflating the centring ZStack
+            // and shoving the foreground off both edges. This is the canonical
+            // fill-and-crop pattern; `.clipped()` alone (the previous approach) only
+            // trimmed pixels, not the reported layout size.
+            LinearGradient(
+                colors: [image.startColor.color, image.endColor.color],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .frame(width: size.width, height: size.height)
+            .overlay {
                 if let remote = image.remoteURL {
-                    // Real Unsplash photo, full-bleed over the gradient.
                     AsyncImage(url: remote) { phase in
                         switch phase {
                         case .success(let photo):
@@ -202,12 +263,12 @@ private struct FactSlide: View {
                             symbolMotif(image.symbol)
                         }
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    // No network image — the faint SF Symbol motif is the texture.
                     symbolMotif(image.symbol)
                 }
             }
+            .frame(width: size.width, height: size.height)
+            .clipped()
         } else {
             Color.black
         }
@@ -245,9 +306,14 @@ private struct FactSlide: View {
                     .font(.system(size: 30, weight: .bold, design: .rounded))
                     .foregroundStyle(.white)
                     .multilineTextAlignment(.leading)
-                    .minimumScaleFactor(0.6)   // shrink an unusually long fact instead of clipping it
+                    .lineLimit(nil)
+                    // Wrap to the column width and grow DOWNWARD. Without this a large
+                    // Text claims its single-line ideal width; the row then outgrows the
+                    // slide and the ZStack centres it, pushing the first characters of
+                    // each line off the LEFT edge — the reported overflow.
+                    .fixedSize(horizontal: false, vertical: true)
                     .shadow(color: .black.opacity(0.45), radius: 8, y: 2)
-                    .frame(maxWidth: .infinity, alignment: .leading)   // pin width to the slide, never overflow
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 if let note = fact.note, !note.isEmpty {
                     Label(note, systemImage: "note.text")
                         .font(.footnote)
@@ -269,6 +335,9 @@ private struct FactSlide: View {
                 }
             )
         }
+        // Pin the row to the slide width so it can never grow wider than the screen
+        // and get centre-clipped off both edges.
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 22)
         .padding(.bottom, 90)
         .padding(.top, 70)

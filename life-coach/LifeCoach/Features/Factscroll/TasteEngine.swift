@@ -5,9 +5,10 @@ import Foundation
 ///
 ///   1. **Embedding taste vector (the real personalization).** Decayed, capped
 ///      sets of the embeddings of liked and disliked facts. The taste vector is
-///      `mean(liked) − mean(disliked)`; the store ranks deduped candidates by
-///      cosine to it and keeps the top N. Most-recent reactions are weighted
-///      heaviest (older ones decay), so taste tracks the user as it shifts.
+///      `mean(liked) − mean(disliked)`; the store re-ranks deduped candidates
+///      using a blended MMR pass that NUDGES rather than hard-filters. Most-recent
+///      reactions are weighted heaviest (older ones decay), so taste tracks the
+///      user as it shifts.
 ///   2. **Topic weights (a light prompt hint).** The original flat
 ///      `topic -> weight` map, still used only to nudge the generator's prompt
 ///      ("lean toward / avoid these topics"). The heavy lifting is the re-rank;
@@ -73,6 +74,12 @@ struct TasteEngine: Codable {
         topic.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
+    // MARK: - Taste strength (evidence-scaled)
+
+    /// Total number of explicit reactions (likes + dislikes) accumulated so far.
+    /// Used by the store's re-rank to scale how strongly taste nudges the feed.
+    var reactionCount: Int { likedVectors.count + dislikedVectors.count }
+
     // MARK: - Updates (topic-weight hint)
 
     mutating func like(topic: String) {
@@ -101,11 +108,41 @@ struct TasteEngine: Codable {
         bump(topic, by: Self.noteNudge)
     }
 
+    /// Public wrapper for the bump logic so `FactscrollStore` can expose
+    /// direct topic weight controls to the "Your taste" panel.
+    ///
+    /// - Parameters:
+    ///   - topic: The topic to adjust (normalized internally).
+    ///   - delta: The amount to add (positive = lean toward, negative = avoid).
+    ///     If the weight returns to 0 it is removed from the map.
+    mutating func adjust(topic: String, by delta: Double) {
+        bump(topic, by: delta)
+    }
+
     private mutating func bump(_ topic: String, by delta: Double) {
         let key = Self.normalize(topic)
         guard !key.isEmpty else { return }
         topicWeights[key, default: 0] += delta
         if topicWeights[key] == 0 { topicWeights.removeValue(forKey: key) }
+    }
+
+    /// Sorted snapshot of all non-trivial topic weights for display in the taste
+    /// panel. Entries with |weight| < 0.1 are omitted as noise.
+    func topicWeightsSorted() -> [(topic: String, weight: Double)] {
+        topicWeights
+            .filter { abs($0.value) >= 0.1 }
+            .map { (topic: $0.key, weight: $0.value) }
+            .sorted { abs($0.weight) > abs($1.weight) }
+    }
+
+    /// Full taste reset: clears all embedding sets, topic weights, and notes.
+    /// After a reset `reactionCount == 0` and `tasteVector() == nil`, so the
+    /// feed returns to its default (novelty / model) ordering immediately.
+    mutating func reset() {
+        topicWeights = [:]
+        notes = []
+        likedVectors = []
+        dislikedVectors = []
     }
 
     // MARK: - Embedding taste vector
