@@ -194,6 +194,30 @@ final class InboxAgent: ObservableObject {
         return reply
     }
 
+    /// Rewrite a structured agent reply as 1–2 natural, conversational spoken sentences,
+    /// suitable for reading aloud by a voice assistant. On any failure (no key, provider
+    /// error), returns the original `reply` so the caller always has something to speak.
+    ///
+    /// Resolves provider/model exactly like `ask(_:)` — same backend, same model.
+    func spokenSummary(of reply: String) async -> String {
+        let provider = currentProvider
+        guard provider.hasKey() else { return reply }
+        let model = store.appStore.state.ai.activeModel
+        let systemPrompt = """
+        Rewrite the assistant reply below as 1–2 natural, conversational spoken sentences \
+        for a voice assistant. Use no markdown, no bullet points, no IDs or structured \
+        formatting — just what you would say out loud in a friendly, warm tone.
+        """
+        guard let spoken = try? await provider.complete(
+            systemPrompt: systemPrompt,
+            userText: reply,
+            model: model
+        ), !spoken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return reply
+        }
+        return spoken.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     // MARK: - Cap fallback
 
     /// One last call asking the model to wrap up what it found/did into a `final`.

@@ -182,7 +182,7 @@ final class InboxStore: ObservableObject {
             ? cached.totalUnread
             : cached.emails.filter { $0.email.isUnread }.count
 
-        recomputeNudges()
+        scheduleNudgeRecompute()
         republish()
     }
 
@@ -256,7 +256,7 @@ final class InboxStore: ObservableObject {
         if wasUnread && !isUnread {
             senderMemory.record(email.senderEmail, markedRead: 1)
             persistLearning()
-            recomputeNudges()
+            scheduleNudgeRecompute()
         }
         republish()
         persist()
@@ -276,7 +276,7 @@ final class InboxStore: ObservableObject {
         persistLearning()
         republish()
         persist()
-        recomputeNudges()
+        scheduleNudgeRecompute()
         return removed
     }
 
@@ -296,7 +296,7 @@ final class InboxStore: ObservableObject {
         if let item = email(for: id) {
             importance.reinforce(positive: false, vector: embedding(for: item))
             persistLearning()
-            recomputeNudges()
+            scheduleNudgeRecompute()
         }
         persistSnoozes()
         republish()
@@ -312,7 +312,7 @@ final class InboxStore: ObservableObject {
         senderMemory.record(item.email.senderEmail, opened: 1)
         importance.reinforce(positive: true, vector: embedding(for: item))
         persistLearning()
-        recomputeNudges()
+        scheduleNudgeRecompute()
         republish()
     }
 
@@ -323,7 +323,7 @@ final class InboxStore: ObservableObject {
         senderMemory.record(item.email.senderEmail, unsubscribed: 1)
         importance.reinforce(positive: false, vector: embedding(for: item))
         persistLearning()
-        recomputeNudges()
+        scheduleNudgeRecompute()
     }
 
     /// Cancel a snooze (the undo of snooze).
@@ -403,7 +403,7 @@ final class InboxStore: ObservableObject {
         // Drop cached embeddings/scores for messages Gmail no longer returns.
         pruneEmbeddingCache()
 
-        recomputeNudges()
+        scheduleNudgeRecompute()
         republish()
         persist()
 
@@ -466,7 +466,7 @@ final class InboxStore: ObservableObject {
             allEmails = (fresh + allEmails).sorted { $0.email.date > $1.email.date }
             for item in fresh { senderMemory.record(item.email.senderEmail, seen: 1) }
             persistLearning()
-            recomputeNudges()
+            scheduleNudgeRecompute()
             republish()
             persist()
         }
@@ -606,17 +606,56 @@ final class InboxStore: ObservableObject {
         return vector
     }
 
-    /// Recompute every visible message's nudge score from the current learning state.
-    /// Cheap because embeddings are cached — only the cosine + sender lookups re-run.
-    private func recomputeNudges() {
-        var scores: [String: Double] = [:]
-        for item in allEmails {
-            scores[item.id] = InboxRanker.nudge(for: item,
-                                                vector: embedding(for: item),
-                                                importance: importance,
-                                                senders: senderMemory)
+    /// Recompute every message's nudge score WITHOUT blocking the main thread.
+    /// Embedding any not-yet-cached message — the expensive part (on-device
+    /// `NLEmbedding`) — runs OFF the main actor via `computeNudges`; only the cache
+    /// merge + score assignment + re-render hop back. Fire-and-forget: ordering stays
+    /// by recency until the fresh scores land, so this never stalls construction, a
+    /// refresh, or a tap. `ImportanceEngine`/`SenderMemory` are value types, so the
+    /// snapshots are safe to read off-actor.
+    private func scheduleNudgeRecompute() {
+        let items = allEmails
+        let known = embeddingCache
+        let importanceSnapshot = importance
+        let sendersSnapshot = senderMemory
+        Task { [weak self] in
+            let (fresh, scores) = await Self.computeNudges(items: items,
+                                                           known: known,
+                                                           importance: importanceSnapshot,
+                                                           senders: sendersSnapshot)
+            guard let self else { return }
+            for (id, vector) in fresh { self.embeddingCache[id] = vector }
+            self.nudgeScores = scores
+            // Re-render so `emails(in:)` re-sorts with the new nudges.
+            self.republish()
         }
-        nudgeScores = scores
+    }
+
+    /// Pure, off-actor work for `scheduleNudgeRecompute`: embed the cache-missing
+    /// messages and score them all. `nonisolated` so it runs on the global executor,
+    /// keeping the heavy embedding off the main thread.
+    private nonisolated static func computeNudges(
+        items: [ClassifiedEmail],
+        known: [String: [Double]],
+        importance: ImportanceEngine,
+        senders: SenderMemory
+    ) async -> (fresh: [String: [Double]], scores: [String: Double]) {
+        var fresh: [String: [Double]] = [:]
+        for item in items where known[item.id] == nil {
+            let text = "\(item.email.subject) \(item.email.senderName) \(item.summary)"
+            if let vector = EmbeddingService.shared.vector(for: text) {
+                fresh[item.id] = vector
+            }
+        }
+        var scores: [String: Double] = [:]
+        for item in items {
+            let vector = known[item.id] ?? fresh[item.id]
+            scores[item.id] = InboxRanker.nudge(for: item,
+                                                vector: vector,
+                                                importance: importance,
+                                                senders: senders)
+        }
+        return (fresh, scores)
     }
 
     /// Evict cached embeddings/scores for messages no longer in the working set.
@@ -733,7 +772,7 @@ final class InboxStore: ObservableObject {
             let base = (rawByID[current.id] ?? current).withEmail(current.email)
             return InboxRanker.override(base, preferences: preferences)
         }
-        recomputeNudges()
+        scheduleNudgeRecompute()
         republish()
         persist()
     }

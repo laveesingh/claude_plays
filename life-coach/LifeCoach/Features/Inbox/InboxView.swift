@@ -1,6 +1,42 @@
 import SwiftUI
 import UIKit
+import Combine
 import AuthenticationServices
+
+/// Owns the Inbox's store + capability registry + agent as a single object so they
+/// are built EXACTLY ONCE (via `@StateObject`'s autoclosure) rather than reconstructed
+/// on every `InboxView.init` — which fires on every `RootView` re-render (a tab switch,
+/// Settings toggle, Coach sub-nav, Home card tap…). Building them eagerly in the view's
+/// `init` used to make a throwaway `InboxStore` and re-run its work each time. The model
+/// re-publishes the store's and agent's changes so the view still updates on their edits.
+@MainActor
+final class InboxViewModel: ObservableObject {
+    let store: InboxStore
+    let capabilities: InboxCapabilities
+    let agent: InboxAgent
+    private var cancellables: Set<AnyCancellable> = []
+
+    init(appStore: AppStore) {
+        let store = InboxStore(store: appStore)
+        let caps = InboxCapabilities(store: store,
+                                     gmail: GmailWriteService(auth: .shared),
+                                     auth: .shared)
+        // The store drives the auto-file sweep (M4) through this same registry, so it
+        // gets the same undoable/reconciled action path as every tap and the agent.
+        store.capabilities = caps
+        self.store = store
+        self.capabilities = caps
+        self.agent = InboxAgent(store: store, capabilities: caps)
+        // Forward the children's publishes so views observing the model re-render when
+        // the store's or agent's @Published state changes.
+        store.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+        self.agent.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+    }
+}
 
 /// The Inbox tab — a read-only chief-of-staff over the user's unread mail. Leads
 /// with a synthesized "Brief" line, offers a filter chip per lane, and groups the
@@ -10,17 +46,16 @@ import AuthenticationServices
 /// reachable through `@EnvironmentObject` inside `init`), `RootView` hands the
 /// store in explicitly.
 struct InboxView: View {
-    @StateObject private var inbox: InboxStore
+    /// The store + capability registry + agent, built EXACTLY ONCE (see `InboxViewModel`).
+    @StateObject private var vm: InboxViewModel
     @EnvironmentObject private var googleAuth: GoogleAuth
 
-    /// The action registry every tap routes through (M2) and the agent reuses
-    /// (M3). Built once alongside the store and shares its exact instance.
-    @State private var capabilities: InboxCapabilities
-
-    /// The "Ask your inbox" agent (M3). Built from the SAME store + capabilities
-    /// instance the list uses, so its actions land in the same optimistic state and
-    /// undo plumbing — never a second store.
-    @StateObject private var agent: InboxAgent
+    /// The store the whole view binds to.
+    private var inbox: InboxStore { vm.store }
+    /// The action registry every tap (M2) and the agent (M3) route through.
+    private var capabilities: InboxCapabilities { vm.capabilities }
+    /// The "Ask your inbox" agent (M3) — the same store + capabilities instance.
+    private var agent: InboxAgent { vm.agent }
 
     /// Whether the Ask chat sheet is presented.
     @State private var showingAsk = false
@@ -53,16 +88,9 @@ struct InboxView: View {
     private static let staleAfter: TimeInterval = 30 * 60
 
     init(store: AppStore) {
-        let inboxStore = InboxStore(store: store)
-        let caps = InboxCapabilities(store: inboxStore,
-                                     gmail: GmailWriteService(auth: .shared),
-                                     auth: .shared)
-        // The store drives the auto-file sweep (M4) through this same registry, so it
-        // gets the same undoable/reconciled action path as every tap and the agent.
-        inboxStore.capabilities = caps
-        _inbox = StateObject(wrappedValue: inboxStore)
-        _capabilities = State(wrappedValue: caps)
-        _agent = StateObject(wrappedValue: InboxAgent(store: inboxStore, capabilities: caps))
+        // Autoclosure → SwiftUI builds the model (and the store) exactly once, not on
+        // every InboxView.init, which fires on every RootView re-render.
+        _vm = StateObject(wrappedValue: InboxViewModel(appStore: store))
     }
 
     var body: some View {
@@ -541,12 +569,15 @@ private struct BriefHeader: View {
                 }
                 Spacer(minLength: 8)
                 Button(action: onAsk) {
-                    Label("Ask", systemImage: "sparkles")
-                        .font(.subheadline.weight(.semibold))
+                    HStack(spacing: 5) {
+                        Image(systemName: "sparkles")
+                            .font(.subheadline.weight(.semibold))
+                        Text("Ask")
+                            .font(.subheadline.weight(.semibold))
+                    }
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
                 .accessibilityLabel("Ask your inbox")
+                .modifier(AskButtonGlassModifier())
                 Button(action: onPreferences) {
                     Image(systemName: "slider.horizontal.3")
                         .font(.body.weight(.semibold))
@@ -1133,21 +1164,47 @@ private enum InboxFormat {
 
 // MARK: - Ask your inbox (M3)
 
-/// The "Ask your inbox" chat surface. A scroll of user/assistant bubbles; beneath
-/// an in-progress assistant turn it renders `agent.steps` as a live, monospaced
-/// action log so the user watches the agent search and act in real time. Suggested
-/// prompts seed first use; the send bar is disabled while the agent is thinking.
-/// The agent shares the inbox's store + capabilities, so any write it makes surfaces
-/// in the inbox's existing undo snackbar behind this sheet.
+// MARK: - Input mode
+
+/// The two interaction modes for the Ask sheet's input area.
+private enum InputMode: Equatable {
+    /// Keyboard-driven text entry (default).
+    case text
+    /// Microphone-first voice recording.
+    case voice
+}
+
+// MARK: - Voice transcription state
+
+/// Fine-grained UI state for the voice recording → transcription flow.
+private enum VoicePhase: Equatable {
+    /// Idle — showing mic button, ready to record.
+    case idle
+    /// Mic is open and capturing audio.
+    case recording
+    /// STT is running on the captured file.
+    case transcribing
+}
+
+// MARK: - AskInboxView
+
+/// The "Ask your inbox" sheet. Two modes:
 ///
-/// Voice layer (on top of the unchanged text path):
-/// - **Mic button**: tap to start recording (InboxVoiceRecorder), tap again to stop
-///   → InboxVoiceSTT transcribes → transcript lands in the text field and is
-///   auto-sent through the same `send()` path the keyboard send button uses. The
-///   agent logic is untouched.
-/// - **Speak replies toggle**: when enabled, each completed assistant reply is
-///   spoken via InboxVoiceTTS (AVSpeechSynthesizer, on-device, no download).
-/// - Both wrappers are initialized lazily — non-voice users pay nothing.
+/// **Text mode** (default): a text field and send button, no mic clutter.
+/// Switch to voice with the mode toggle.
+///
+/// **Voice mode**: a large mic record control with audio-level animation.
+/// On stop, shows a "Transcribing…" state while WhisperKit runs, then
+/// surfaces the transcript as the user's chat bubble and auto-sends it to
+/// the agent. Replies are auto-spoken (via `InboxAgent.spokenSummary`) in
+/// voice mode; a mute toggle silences the current utterance and future ones.
+///
+/// ## Liquid Glass theming
+/// The input bar, mode-toggle pill, and action buttons all use iOS 26 Liquid
+/// Glass APIs (`GlassEffectContainer`, `.glassEffect(.regular, in:)`,
+/// `.buttonStyle(.glass)`, `.buttonStyle(.glassProminent)`), each wrapped in
+/// `#available(iOS 26.0, *)` with `.secondarySystemBackground`/`.bordered`
+/// fallbacks so the deployment target stays at iOS 17.
 private struct AskInboxView: View {
     @ObservedObject var agent: InboxAgent
     @Environment(\.dismiss) private var dismiss
@@ -1165,12 +1222,25 @@ private struct AskInboxView: View {
     @StateObject private var stt = InboxVoiceSTT()
     @StateObject private var tts = InboxVoiceTTS()
 
-    /// Whether voice speak-back is enabled. Persisted per session only (no
-    /// UserDefaults — the toggle is visible in the toolbar).
-    @State private var speakReplies = false
+    /// Controls whether the input area is text- or voice-first.
+    @State private var inputMode: InputMode = .text
+
+    /// Fine-grained state for the recording → STT flow (voice mode only).
+    @State private var voicePhase: VoicePhase = .idle
+
+    /// The live partial transcript shown while recording (populated after STT
+    /// on stop; shown immediately as a "heard" preview before sending).
+    @State private var liveTranscript: String = ""
+
+    /// Whether auto-spoken replies are muted. Persists for the session only
+    /// (not UserDefaults). Shown only in voice mode.
+    @State private var isMuted = false
 
     /// Any inline error from the voice layer (STT failure, no mic permission, etc.).
     @State private var voiceError: String?
+
+    /// Namespace for Liquid Glass morphing (iOS 26+).
+    @Namespace private var glassNS
 
     /// One completed user → assistant exchange.
     private struct Turn: Identifiable {
@@ -1202,21 +1272,6 @@ private struct AskInboxView: View {
             .navigationTitle("Ask your inbox")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    // Speak-replies toggle: microphone.badge.waveform when ON.
-                    Button {
-                        speakReplies.toggle()
-                        if !speakReplies { tts.stop() }
-                    } label: {
-                        Image(systemName: speakReplies
-                              ? "speaker.wave.2.fill"
-                              : "speaker.slash")
-                            .font(.body.weight(.semibold))
-                            .foregroundStyle(speakReplies ? Color.accentColor : Color.secondary)
-                    }
-                    .accessibilityLabel(speakReplies ? "Speak replies on" : "Speak replies off")
-                    .accessibilityHint("Toggle spoken read-back of assistant replies")
-                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") {
                         tts.stop()
@@ -1230,11 +1285,13 @@ private struct AskInboxView: View {
         .presentationDragIndicator(.visible)
     }
 
+    // MARK: - Conversation scroll
+
     private var conversation: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
-                    if turns.isEmpty && pending == nil {
+                    if turns.isEmpty && pending == nil && liveTranscript.isEmpty {
                         intro
                     }
                     ForEach(turns) { turn in
@@ -1245,6 +1302,11 @@ private struct AskInboxView: View {
                         ChatBubble(role: .user, text: pending)
                         AgentActionLog(steps: agent.steps, isThinking: agent.isThinking)
                     }
+                    // Visible transcription: while transcribing, show partial text
+                    // so the user sees what was heard before the send completes.
+                    if !liveTranscript.isEmpty && pending == nil {
+                        ChatBubble(role: .user, text: liveTranscript)
+                    }
                     Color.clear.frame(height: 1).id("bottom")
                 }
                 .padding(16)
@@ -1253,6 +1315,7 @@ private struct AskInboxView: View {
             .onChange(of: agent.steps.count) { _, _ in scrollToBottom(proxy) }
             .onChange(of: turns.count) { _, _ in scrollToBottom(proxy) }
             .onChange(of: pending) { _, _ in scrollToBottom(proxy) }
+            .onChange(of: liveTranscript) { _, _ in scrollToBottom(proxy) }
         }
     }
 
@@ -1264,8 +1327,13 @@ private struct AskInboxView: View {
     private var intro: some View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 6) {
-                Label("Ask your inbox", systemImage: "sparkles")
-                    .font(.headline)
+                HStack(spacing: 6) {
+                    Image(systemName: "sparkles")
+                        .font(.headline)
+                        .foregroundStyle(.tint)
+                    Text("Ask your inbox")
+                        .font(.headline)
+                }
                 Text("Ask in plain language and I'll search, summarize, and act on your mail — safely. Bulk changes are confirmed first.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
@@ -1286,11 +1354,10 @@ private struct AskInboxView: View {
                         .padding(.horizontal, 12)
                         .padding(.vertical, 10)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color(.secondarySystemBackground),
-                                    in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.primary)
+                    .modifier(SuggestionCardModifier())
                 }
             }
         }
@@ -1298,27 +1365,40 @@ private struct AskInboxView: View {
         .padding(.top, 8)
     }
 
-    /// The input bar: mic button + text field + send button. The mic button
-    /// replaces the send button while recording, but the text field remains
-    /// editable so the user can correct the transcript if needed.
+    // MARK: - Input bar
+
+    /// The input bar, adapting layout to the current mode.
+    ///
+    /// **Text mode**: mode-toggle pill | text field | send button.
+    /// **Voice mode**: mode-toggle pill | mic control (+ mute) with "type instead" link.
     private var inputBar: some View {
-        HStack(spacing: 10) {
-            // Mic button — toggles recording; shows a level bar while active.
-            MicButton(recorder: recorder,
-                      isDisabled: agent.isThinking || stt.status == .downloading) {
-                Task { await toggleRecording() }
+        VStack(spacing: 0) {
+            if inputMode == .text {
+                textInputBar
+            } else {
+                voiceInputBar
             }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
+
+    /// Text mode: segmented/glass toggle + field + send.
+    private var textInputBar: some View {
+        HStack(spacing: 10) {
+            modeTogglePill
 
             TextField("Ask your inbox…", text: $input)
                 .textFieldStyle(.plain)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 9)
-                .background(Color(.secondarySystemBackground), in: Capsule())
+                .modifier(InputFieldBackgroundModifier())
                 .focused($inputFocused)
-                .disabled(agent.isThinking || recorder.isRecording)
+                .disabled(agent.isThinking)
                 .submitLabel(.send)
                 .onSubmit { send(input) }
 
+            // Send button
             Button {
                 send(input)
             } label: {
@@ -1326,94 +1406,222 @@ private struct AskInboxView: View {
                     .font(.title2)
             }
             .disabled(agent.isThinking
-                      || recorder.isRecording
                       || input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             .accessibilityLabel("Send")
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+    }
+
+    /// Voice mode: toggle + centered mic control row + mute + type-instead link.
+    private var voiceInputBar: some View {
+        VStack(spacing: 12) {
+            HStack(spacing: 16) {
+                modeTogglePill
+
+                Spacer(minLength: 0)
+
+                // Mute toggle — only shown in voice mode.
+                Button {
+                    isMuted.toggle()
+                    if isMuted { tts.stop() }
+                } label: {
+                    Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(isMuted ? Color.secondary : Color.accentColor)
+                }
+                .accessibilityLabel(isMuted ? "Unmute spoken replies" : "Mute spoken replies")
+                .modifier(GlassCircleButtonModifier())
+            }
+
+            // Central mic control with phase-aware state.
+            voiceMicControl
+
+            // Subtle "type instead" link to flip back to text mode.
+            Button {
+                switchToText()
+            } label: {
+                Text("Type instead")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .padding(.bottom, 2)
+        }
+    }
+
+    /// The large mic control with recording level animation and transcribing indicator.
+    @ViewBuilder
+    private var voiceMicControl: some View {
+        switch voicePhase {
+        case .idle:
+            LargeVoiceMicButton(isRecording: false, audioLevel: recorder.audioLevel,
+                                isDisabled: agent.isThinking || stt.status == .downloading) {
+                Task { await startRecording() }
+            }
+
+        case .recording:
+            LargeVoiceMicButton(isRecording: true, audioLevel: recorder.audioLevel,
+                                isDisabled: false) {
+                Task { await stopRecordingAndTranscribe() }
+            }
+
+        case .transcribing:
+            VStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.large)
+                Text("Transcribing…")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(height: 72)
+        }
+    }
+
+    // MARK: - Mode toggle pill
+
+    /// A two-segment glass pill to switch between text and voice modes.
+    private var modeTogglePill: some View {
+        HStack(spacing: 0) {
+            modeSegment(icon: "keyboard", mode: .text,  label: "Text input")
+            modeSegment(icon: "mic.fill",  mode: .voice, label: "Voice input")
+        }
+        .modifier(ModeTogglePillModifier())
+    }
+
+    private func modeSegment(icon: String, mode: InputMode, label: String) -> some View {
+        Button {
+            if mode == .text { switchToText() } else { switchToVoice() }
+        } label: {
+            Image(systemName: icon)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(inputMode == mode ? Color.primary : Color.secondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    inputMode == mode
+                        ? Color(.tertiarySystemBackground).opacity(0.6)
+                        : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+
+    // MARK: - Mode switch helpers
+
+    private func switchToText() {
+        if recorder.isRecording { _ = recorder.stop() }
+        tts.stop()
+        liveTranscript = ""
+        voicePhase = .idle
+        withAnimation(.spring(response: 0.3)) { inputMode = .text }
+    }
+
+    private func switchToVoice() {
+        inputFocused = false
+        withAnimation(.spring(response: 0.3)) { inputMode = .voice }
     }
 
     // MARK: - Send
 
     /// Send a message: stash it as the pending turn, run the agent, then file the
     /// completed exchange. Guards against sending while a turn is in flight.
+    /// In voice mode, auto-speaks the `spokenSummary` of the reply (unless muted).
     private func send(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !agent.isThinking, pending == nil else { return }
         input = ""
+        liveTranscript = ""
         inputFocused = false
         pending = trimmed
         Task {
             let reply = await agent.ask(trimmed)
             turns.append(Turn(user: trimmed, assistant: reply))
             pending = nil
-            // Speak the reply if voice mode is on.
-            if speakReplies {
-                tts.speak(reply)
+            // In voice mode: auto-speak the natural spoken summary (unless muted).
+            if inputMode == .voice, !isMuted {
+                let spoken = await agent.spokenSummary(of: reply)
+                tts.speak(spoken)
             }
         }
     }
 
     // MARK: - Voice recording + STT
 
-    /// Toggle recording: start if idle, stop + transcribe if already recording.
-    private func toggleRecording() async {
+    /// Start recording; transition voice phase to `.recording`.
+    private func startRecording() async {
         voiceError = nil
-        if recorder.isRecording {
-            guard let fileURL = recorder.stop() else { return }
-            await transcribeAndSend(fileURL: fileURL)
+        tts.stop()      // silence any in-progress TTS before the mic opens
+        let granted = await recorder.start()
+        if granted {
+            voicePhase = .recording
         } else {
-            tts.stop()      // silence TTS before the mic opens
-            let granted = await recorder.start()
-            if !granted {
-                voiceError = "Allow microphone access in Settings to use voice input."
-            }
+            voiceError = "Allow microphone access in Settings to use voice input."
         }
     }
 
-    /// Run STT on the recorded file; put the transcript in the text field and
-    /// auto-send it through the existing agent path.
-    private func transcribeAndSend(fileURL: URL) async {
+    /// Stop recording, show "Transcribing…", run STT, show transcript bubble,
+    /// then auto-send. The user sees the transcript BEFORE it is sent.
+    private func stopRecordingAndTranscribe() async {
+        guard let fileURL = recorder.stop() else { return }
+        voicePhase = .transcribing
         do {
             let transcript = try await stt.transcribe(audioPath: fileURL)
-            guard !transcript.isEmpty else { return }
-            // Put text in field (visible feedback) then send immediately.
-            input = transcript
+            guard !transcript.isEmpty else {
+                voicePhase = .idle
+                return
+            }
+            // Surface the transcript as a visible bubble so the user sees what was heard.
+            liveTranscript = transcript
+            voicePhase = .idle
+            // Brief delay so the bubble is visible before it transitions to a real turn.
+            try? await Task.sleep(nanoseconds: 200_000_000)
             send(transcript)
         } catch {
+            voicePhase = .idle
             voiceError = "Couldn't transcribe: \(error.localizedDescription). Check your connection for the first model download."
         }
     }
 }
 
-// MARK: - Mic button
+// MARK: - Large voice mic button (voice mode)
 
-/// A small mic button that shows the current audio level as a growing circle
-/// while recording. Tapping it calls `action`.
-private struct MicButton: View {
-    @ObservedObject var recorder: InboxVoiceRecorder
+/// A large, prominent mic / stop button for voice mode. Shows an animated
+/// audio-level ring while recording. Styled with Liquid Glass on iOS 26.
+private struct LargeVoiceMicButton: View {
+    let isRecording: Bool
+    let audioLevel: Float
     let isDisabled: Bool
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             ZStack {
-                if recorder.isRecording {
-                    // Level ring: grows with audio loudness.
+                if isRecording {
+                    // Animated level ring — grows with audio loudness.
                     Circle()
-                        .fill(Color.red.opacity(0.15 + Double(recorder.audioLevel) * 0.45))
-                        .frame(width: 36, height: 36)
-                        .animation(.easeOut(duration: 0.08), value: recorder.audioLevel)
+                        .fill(Color.red.opacity(0.12 + Double(audioLevel) * 0.35))
+                        .frame(width: 80, height: 80)
+                        .animation(.easeOut(duration: 0.08), value: audioLevel)
+                    Circle()
+                        .fill(Color.red.opacity(0.07 + Double(audioLevel) * 0.2))
+                        .frame(width: 96 + CGFloat(audioLevel) * 16, height: 96 + CGFloat(audioLevel) * 16)
+                        .animation(.easeOut(duration: 0.12), value: audioLevel)
                 }
-                Image(systemName: recorder.isRecording ? "stop.circle.fill" : "mic.circle.fill")
-                    .font(.title2)
-                    .foregroundStyle(recorder.isRecording ? Color.red : Color.secondary)
+                Image(systemName: isRecording ? "stop.fill" : "mic.fill")
+                    .font(.system(size: 28, weight: .semibold))
+                    .foregroundStyle(isRecording ? Color.red : Color.white)
+                    .frame(width: 64, height: 64)
+                    .background(
+                        isRecording ? Color.red.opacity(0.15) : Color.accentColor,
+                        in: Circle()
+                    )
             }
         }
         .buttonStyle(.plain)
         .disabled(isDisabled)
-        .accessibilityLabel(recorder.isRecording ? "Stop recording" : "Start voice input")
+        .accessibilityLabel(isRecording ? "Stop recording" : "Start voice input")
+        .frame(height: 72)
     }
 }
 
@@ -1540,6 +1748,84 @@ private struct AgentActionLog: View {
         case "snooze": return "clock"
         case "bulk_apply": return "square.stack.3d.up"
         default: return "circle.dotted"
+        }
+    }
+}
+
+// MARK: - Glass modifier helpers
+
+/// Applies Liquid Glass prominent styling on iOS 26+, falling back to
+/// `.borderedProminent` + `.small` control size on earlier OS versions.
+private struct AskButtonGlassModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content
+                .buttonStyle(.glassProminent)
+                .controlSize(.small)
+        } else {
+            content
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+        }
+    }
+}
+
+// MARK: - Reusable Liquid Glass modifiers
+
+/// Glass card background for suggestion buttons: `.glassEffect(.regular, in: .roundedRectangle(cornerRadius:12))`
+/// on iOS 26+; `Color(.secondarySystemBackground)` fill on earlier OS.
+private struct SuggestionCardModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        } else {
+            content
+                .background(Color(.secondarySystemBackground),
+                            in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+    }
+}
+
+/// Glass capsule background for the text-input field.
+private struct InputFieldBackgroundModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content
+                .glassEffect(.regular, in: Capsule())
+        } else {
+            content
+                .background(Color(.secondarySystemBackground), in: Capsule())
+        }
+    }
+}
+
+/// Glass rounded-rectangle container for the mode toggle pill.
+private struct ModeTogglePillModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .padding(2)
+        } else {
+            content
+                .background(Color(.secondarySystemBackground),
+                            in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .padding(2)
+        }
+    }
+}
+
+/// Circular glass button (e.g. mute toggle).
+private struct GlassCircleButtonModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content
+                .buttonStyle(.glass)
+        } else {
+            content
+                .buttonStyle(.bordered)
+                .clipShape(Circle())
         }
     }
 }
