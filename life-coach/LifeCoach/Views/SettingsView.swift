@@ -13,10 +13,12 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                aboutSection
                 aiSection
                 APIKeyField(provider: .ollama)
                 APIKeyField(provider: .claude)
                 UnsplashKeyField()
+                NewsDataKeyField()
                 gmailSection
                 coachSection
                 integrationsSection
@@ -75,6 +77,34 @@ struct SettingsView: View {
             }
             gmailError = error.localizedDescription
         }
+    }
+
+    private var aboutSection: some View {
+        Section {
+            HStack {
+                Label("Sapiod", systemImage: "sparkles")
+                    .labelStyle(.titleAndIcon)
+                    .fontWeight(.semibold)
+                Spacer()
+                Text("\(appVersion) (\(appBuild))")
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+        } footer: {
+            Text("Build \(appBuild) — auto-stamped at build time (year.monthday.hourminute) so you always know which binary is on the device.")
+        }
+    }
+
+    /// Marketing version, e.g. "1.0".
+    private var appVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
+    }
+
+    /// Build number — stamped to a timestamp on every build by the "Stamp build
+    /// number" run-script phase.
+    private var appBuild: String {
+        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "—"
     }
 
     private var aiSection: some View {
@@ -314,6 +344,52 @@ private struct UnsplashKeyField: View {
             Text("Unsplash (Factscroll photos)")
         } footer: {
             Text("Gives Factscroll real cover photos per topic. Create a free key at unsplash.com/developers → New Application → Access Key. Stored only in this device's Keychain. Takes effect on next launch.")
+        }
+    }
+}
+
+/// NewsData.io API-key entry — same edit-protected pattern as `UnsplashKeyField`,
+/// backed by the Keychain's named-secret store. Optional: when set, News adds a
+/// fourth, full-text source on top of the three keyless ones (Google News RSS,
+/// GDELT, web search).
+private struct NewsDataKeyField: View {
+    @State private var editing = false
+    @State private var draft = ""
+
+    var body: some View {
+        Section {
+            if editing {
+                SecureField("NewsData.io API Key", text: $draft)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                HStack {
+                    Button("Save") {
+                        KeychainHelper.save(draft.trimmingCharacters(in: .whitespacesAndNewlines),
+                                            secret: .newsDataKey)
+                        editing = false
+                    }
+                    Spacer()
+                    Button("Cancel", role: .cancel) {
+                        editing = false
+                        draft = ""
+                    }
+                }
+            } else {
+                HStack {
+                    Label(KeychainHelper.hasKey(secret: .newsDataKey) ? "Key saved" : "No key set",
+                          systemImage: KeychainHelper.hasKey(secret: .newsDataKey) ? "checkmark.seal.fill" : "newspaper")
+                        .foregroundStyle(KeychainHelper.hasKey(secret: .newsDataKey) ? Color.secondary : Color.orange)
+                    Spacer()
+                    Button("Edit") {
+                        draft = KeychainHelper.load(secret: .newsDataKey) ?? ""
+                        editing = true
+                    }
+                }
+            }
+        } header: {
+            Text("News (NewsData.io)")
+        } footer: {
+            Text("Optional. Adds a fourth news source with full-text search. Get a free key at newsdata.io → Dashboard → API Key. Works without a key — the other sources (Google News RSS, GDELT, web search) run without one.")
         }
     }
 }
