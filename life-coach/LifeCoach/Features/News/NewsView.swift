@@ -42,7 +42,7 @@ struct NewsView: View {
                 }
         }
         .sheet(item: $reading) { story in
-            StoryDrawer(story: story)
+            StoryDrawer(story: story, news: news)
         }
         .sheet(isPresented: $editingTopics) {
             TopicsEditor(news: news)
@@ -99,10 +99,14 @@ struct NewsView: View {
                 ForEach(dayGroups, id: \.day) { group in
                     Section {
                         ForEach(group.stories) { story in
-                            Button { reading = story } label: {
-                                StoryCard(story: story)
+                            // A tap gesture (not a wrapping Button) opens the
+                            // drawer, so the card's inline thumb buttons stay
+                            // independently tappable.
+                            StoryCard(story: story) { reaction in
+                                news.react(to: story, with: reaction)
                             }
-                            .buttonStyle(.plain)
+                            .contentShape(Rectangle())
+                            .onTapGesture { reading = story }
                             .padding(.horizontal)
                         }
                     } header: {
@@ -232,10 +236,12 @@ private struct NewsHeader: View {
 // MARK: - Story card
 
 /// A clean timeline card: header row with "#N", the interest-label badge, and an
-/// "as of <date>" stamp; the headline; the outlet line (with an Opinion tag and a
-/// multi-outlet corroboration badge when applicable); then the short `summary1`.
+/// "as of <date>" stamp; the headline; the outlet line (with an Opinion tag, a
+/// multi-outlet corroboration badge, and the thumbs that train the news taste);
+/// then the short `summary1`.
 private struct StoryCard: View {
     let story: NewsStory
+    let react: (Reaction) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -271,6 +277,7 @@ private struct StoryCard: View {
                     OutletCountBadge(count: story.outletCount)
                 }
                 Spacer(minLength: 0)
+                ReactionButtons(reaction: story.reaction, react: react)
             }
 
             Text(story.summary1)
@@ -283,6 +290,34 @@ private struct StoryCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(.secondarySystemBackground))
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+}
+
+// MARK: - Reaction buttons
+
+/// The thumbs pair that trains the news taste vector. Borderless so the buttons
+/// stay tappable inside the card whose tap gesture opens the drawer; the active
+/// reaction fills its glyph and takes the tint.
+private struct ReactionButtons: View {
+    let reaction: Reaction
+    let react: (Reaction) -> Void
+
+    var body: some View {
+        HStack(spacing: 16) {
+            Button { react(.like) } label: {
+                Image(systemName: reaction == .like ? "hand.thumbsup.fill" : "hand.thumbsup")
+                    .font(.footnote)
+                    .foregroundStyle(reaction == .like ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+            }
+            .accessibilityLabel("More like this")
+            Button { react(.dislike) } label: {
+                Image(systemName: reaction == .dislike ? "hand.thumbsdown.fill" : "hand.thumbsdown")
+                    .font(.footnote)
+                    .foregroundStyle(reaction == .dislike ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+            }
+            .accessibilityLabel("Less like this")
+        }
+        .buttonStyle(.borderless)
     }
 }
 
@@ -383,10 +418,18 @@ private struct InterestBadge: View {
 // MARK: - Reading drawer
 
 /// The bottom drawer for one story: header (#N, badge, time), the long
-/// `summary2`, then the sources as tappable links.
+/// `summary2`, then the sources as tappable links. Observes the store so the
+/// thumbs reflect the live reaction, not the value captured when the sheet opened.
 private struct StoryDrawer: View {
     let story: NewsStory
+    @ObservedObject var news: NewsStore
     @Environment(\.dismiss) private var dismiss
+
+    /// The store's current copy of this story (reaction may have changed since
+    /// the sheet was presented); falls back to the captured value.
+    private var liveStory: NewsStory {
+        news.stories.first(where: { $0.id == story.id }) ?? story
+    }
 
     var body: some View {
         NavigationStack {
@@ -451,6 +494,9 @@ private struct StoryDrawer: View {
                     OutletCountBadge(count: story.outletCount)
                 }
                 Spacer(minLength: 0)
+                ReactionButtons(reaction: liveStory.reaction) { reaction in
+                    news.react(to: liveStory, with: reaction)
+                }
             }
         }
     }

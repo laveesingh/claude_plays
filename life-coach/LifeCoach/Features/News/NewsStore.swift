@@ -28,6 +28,11 @@ final class NewsStore: ObservableObject {
     private let ollama = OllamaProvider()
     private let fileStore = FileStore<Cache>(filename: "news.json")
 
+    /// The user's learned news taste — same engine as Factscroll's, fed here by
+    /// thumbs-up/down on stories. Its vector nudges `NewsRanker`'s cluster scores;
+    /// its topic weights become lean/avoid hints in the editor prompt.
+    private(set) var taste = TasteEngine()
+
     /// Dedup + numbering + label state, persisted alongside the timeline.
     private var seenSignatures: Set<String> = []
     private var storyCounter = 0
@@ -44,11 +49,12 @@ final class NewsStore: ObservableObject {
         var topicLabels: [String: String] = [:]
         var lastUpdated: Date?
         var freshnessWindow: Double = 7.0
+        var taste = TasteEngine()
 
         init() {}
 
         private enum CodingKeys: String, CodingKey {
-            case topics, stories, seenSignatures, storyCounter, topicLabels, lastUpdated, freshnessWindow
+            case topics, stories, seenSignatures, storyCounter, topicLabels, lastUpdated, freshnessWindow, taste
         }
 
         init(from decoder: Decoder) throws {
@@ -60,6 +66,7 @@ final class NewsStore: ObservableObject {
             topicLabels = (try? c.decode([String: String].self, forKey: .topicLabels)) ?? [:]
             lastUpdated = try? c.decodeIfPresent(Date.self, forKey: .lastUpdated)
             freshnessWindow = (try? c.decodeIfPresent(Double.self, forKey: .freshnessWindow)) ?? 7.0
+            taste = (try? c.decodeIfPresent(TasteEngine.self, forKey: .taste)) ?? TasteEngine()
         }
     }
 
@@ -75,6 +82,7 @@ final class NewsStore: ObservableObject {
         topicLabels = cached.topicLabels
         lastUpdated = cached.lastUpdated
         freshnessWindow = cached.freshnessWindow
+        taste = cached.taste
     }
 
     /// The active backend, resolved from persisted settings - same rule as the coach.
@@ -149,6 +157,33 @@ final class NewsStore: ObservableObject {
         }.joined(separator: " ")
     }
 
+    // MARK: - Reactions (taste training)
+
+    /// Toggle a thumbs-up/down on a story. Re-tapping the active reaction clears
+    /// it; flipping replaces it. The story's headline embedding trains the taste
+    /// vector (evidence-scaled in `NewsRanker`), and the story's interest label
+    /// feeds the lean/avoid prompt hints. Everything persists immediately.
+    func react(to story: NewsStory, with reaction: Reaction) {
+        guard let index = stories.firstIndex(where: { $0.id == story.id }) else { return }
+        let old = stories[index].reaction
+        let new = old == reaction ? Reaction.none : reaction
+        stories[index].reaction = new
+
+        // Embedding of what the story IS (headline + lede) — one short sentence
+        // embed per tap, cheap enough to stay synchronous.
+        let vector = EmbeddingService.shared.vector(for: "\(story.headline). \(story.summary1)")
+        taste.applyReaction(old: old, new: new, vector: vector)
+
+        // Topic-weight hint mirrors Factscroll's like/dislike bookkeeping.
+        taste.undo(old, topic: story.interestLabel)
+        switch new {
+        case .like: taste.like(topic: story.interestLabel)
+        case .dislike: taste.dislike(topic: story.interestLabel)
+        case .none: break
+        }
+        persist()
+    }
+
     // MARK: - Refresh
 
     /// For each topic: aggregate from every enabled source (Google News RSS, GDELT,
@@ -173,7 +208,14 @@ final class NewsStore: ObservableObject {
 
         for topic in topics {
             // 1. Multi-source aggregation (off the main thread under the hood).
-            let clusters = await NewsAggregator.aggregate(topic: topic.text, since: since)
+            let aggregated = await NewsAggregator.aggregate(topic: topic.text, since: since)
+
+            // 1b. Personal relevance ranking: gate off-topic noise, blend in the
+            //     learned taste, cap to the top clusters. Async → off-main embeds.
+            let clusters = await NewsRanker.rank(aggregated,
+                                                 topic: topic.text,
+                                                 taste: taste,
+                                                 windowSeconds: freshnessWindow * 86_400)
             guard !clusters.isEmpty else { continue }
 
             // 2. One LLM call over the pre-clustered, date-verified material.
@@ -183,7 +225,9 @@ final class NewsStore: ObservableObject {
                     systemPrompt: Self.systemPrompt,
                     userText: Self.buildUserPayload(topic: topic,
                                                     clusters: clusters,
-                                                    seenHeadlines: seenHeadlines(for: topic)),
+                                                    seenHeadlines: seenHeadlines(for: topic),
+                                                    leanTopics: taste.leanTopics(),
+                                                    avoidTopics: taste.avoidTopics()),
                     model: model
                 )
             } catch {
@@ -308,6 +352,7 @@ final class NewsStore: ObservableObject {
         cache.topicLabels = topicLabels
         cache.lastUpdated = lastUpdated
         cache.freshnessWindow = freshnessWindow
+        cache.taste = taste
         fileStore.save(cache)
     }
 
@@ -319,7 +364,9 @@ final class NewsStore: ObservableObject {
     /// already-deduplicated, date-verified story — the model only writes prose.
     private static func buildUserPayload(topic: Topic,
                                          clusters: [AggregatedCluster],
-                                         seenHeadlines: [String]) -> String {
+                                         seenHeadlines: [String],
+                                         leanTopics: [String] = [],
+                                         avoidTopics: [String] = []) -> String {
         let clusterBlocks = clusters.enumerated().map { index, cluster -> String in
             let day = DateExtractor.dayFormatter.string(from: cluster.authoritativeDate)
             let opinionTag = cluster.contentType == .news ? "" : " [\(cluster.contentType.rawValue.uppercased())]"
@@ -346,9 +393,23 @@ final class NewsStore: ObservableObject {
             seenBlock = seenHeadlines.map { "- \($0)" }.joined(separator: "\n")
         }
 
+        var tasteBlock = ""
+        if !leanTopics.isEmpty || !avoidTopics.isEmpty {
+            let lean = leanTopics.isEmpty ? "(none)" : leanTopics.joined(separator: ", ")
+            let avoid = avoidTopics.isEmpty ? "(none)" : avoidTopics.joined(separator: ", ")
+            tasteBlock = """
+
+            READER TASTE (from their reactions — angle summaries toward what they care about; \
+            NEVER invent facts to please them, and never drop a cluster because of taste):
+            leans toward: \(lean)
+            tired of: \(avoid)
+
+            """
+        }
+
         return """
         TOPIC: \(topic.text)
-
+        \(tasteBlock)
         PRE-CLUSTERED STORIES (each is ONE deduplicated, date-verified story — write a summary for each, citing its exact urls and copying its exact date):
         \(clusterBlocks)
 

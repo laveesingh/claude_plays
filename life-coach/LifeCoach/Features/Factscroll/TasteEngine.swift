@@ -126,6 +126,13 @@ struct TasteEngine: Codable {
         if topicWeights[key] == 0 { topicWeights.removeValue(forKey: key) }
     }
 
+    /// The accumulated weight for one topic (0 when unseen). Normalized like every
+    /// other topic lookup, so `FactscrollStore`'s re-rank can bias by a fact's
+    /// topic exactly as the taste panel's +/- controls recorded it.
+    func weight(forTopic topic: String) -> Double {
+        topicWeights[Self.normalize(topic)] ?? 0
+    }
+
     /// Sorted snapshot of all non-trivial topic weights for display in the taste
     /// panel. Entries with |weight| < 0.1 are omitted as noise.
     func topicWeightsSorted() -> [(topic: String, weight: Double)] {

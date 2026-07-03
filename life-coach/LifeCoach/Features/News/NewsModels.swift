@@ -100,6 +100,10 @@ struct NewsStory: Codable, Identifiable, Hashable {
     let outletCount: Int          // distinct outlets that corroborated the story
     let dateConfidence: DateConfidence // high (structured date) / low (heuristic)
 
+    /// The user's thumbs-up/down on this story — the signal that trains the News
+    /// taste vector. Default-backed so older caches decode cleanly.
+    var reaction: Reaction
+
     /// The date to file this story under in the timeline: its real publication
     /// date when we could extract one, else our fetch time as a fallback. Kept as
     /// a fallback for OLD cached stories; new stories never enter with a nil date,
@@ -119,7 +123,8 @@ struct NewsStory: Codable, Identifiable, Hashable {
          outlet: String = "",
          contentType: NewsContentType = .news,
          outletCount: Int = 1,
-         dateConfidence: DateConfidence = .high) {
+         dateConfidence: DateConfidence = .high,
+         reaction: Reaction = .none) {
         self.id = id
         self.storyNumber = storyNumber
         self.interestLabel = interestLabel
@@ -134,12 +139,13 @@ struct NewsStory: Codable, Identifiable, Hashable {
         self.contentType = contentType
         self.outletCount = outletCount
         self.dateConfidence = dateConfidence
+        self.reaction = reaction
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, storyNumber, interestLabel, headline, summary1, summary2
         case sources, createdAt, publishedDate, signature
-        case outlet, contentType, outletCount, dateConfidence
+        case outlet, contentType, outletCount, dateConfidence, reaction
     }
 
     /// Tolerant decode: the four TKT-0109 fields are read with `decodeIfPresent`
@@ -161,6 +167,7 @@ struct NewsStory: Codable, Identifiable, Hashable {
         contentType = (try c.decodeIfPresent(NewsContentType.self, forKey: .contentType)) ?? .news
         outletCount = (try c.decodeIfPresent(Int.self, forKey: .outletCount)) ?? 1
         dateConfidence = (try c.decodeIfPresent(DateConfidence.self, forKey: .dateConfidence)) ?? .high
+        reaction = (try c.decodeIfPresent(Reaction.self, forKey: .reaction)) ?? .none
     }
 
     func encode(to encoder: Encoder) throws {
@@ -179,6 +186,7 @@ struct NewsStory: Codable, Identifiable, Hashable {
         try c.encode(contentType, forKey: .contentType)
         try c.encode(outletCount, forKey: .outletCount)
         try c.encode(dateConfidence, forKey: .dateConfidence)
+        try c.encode(reaction, forKey: .reaction)
     }
 
     /// The dedup signature for a headline: lowercased, trimmed, punctuation

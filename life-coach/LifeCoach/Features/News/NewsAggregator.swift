@@ -48,8 +48,9 @@ enum NewsAggregator {
     /// Token-overlap fraction for the embedding-unavailable fallback.
     private static let clusterTokenOverlapThreshold = 0.5
 
-    /// Reputable straight-news domains → `.news`.
-    private static let reputableNews: Set<String> = [
+    /// Reputable straight-news domains → `.news`. Internal: `NewsRanker` also
+    /// consults it for its reputable-outlet score bonus.
+    static let reputableNews: Set<String> = [
         "reuters.com", "apnews.com", "bbc.com", "bbc.co.uk", "nytimes.com",
         "theguardian.com", "bloomberg.com", "wsj.com", "ft.com", "cnbc.com",
         "axios.com", "npr.org", "washingtonpost.com", "economist.com",

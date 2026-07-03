@@ -89,7 +89,40 @@ struct FactTasteView: View {
                 Text("These gently steer your feed. One reaction barely moves the dial; a consistent pattern over many shifts the mix gradually. The feed always stays varied.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                strengthEvidence
+                    .padding(.top, 6)
             }
+        }
+    }
+
+    /// Live evidence that tuning is taking hold: the current taste strength
+    /// (evidence-scaled from reaction count) with a small gauge bar.
+    @ViewBuilder
+    private var strengthEvidence: some View {
+        let percent = Int((store.tasteStrength * 100).rounded())
+        let count = store.reactionCount
+        VStack(alignment: .leading, spacing: 4) {
+            if count > 0 {
+                Text("Taste strength \(percent)% — from \(count) reaction\(count == 1 ? "" : "s")")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.primary)
+            } else {
+                Text("Taste strength 0% — no reactions yet")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(.secondary.opacity(0.15))
+                        .frame(height: 4)
+                    Capsule()
+                        .fill(.tint)
+                        .frame(width: max(4, geo.size.width * store.tasteStrengthFraction),
+                               height: 4)
+                }
+            }
+            .frame(height: 4)
         }
     }
 
@@ -236,8 +269,10 @@ private struct TopicWeightRow: View {
 
     private var steppers: some View {
         HStack(spacing: 8) {
-            adjustButton(symbol: "minus", delta: -0.5)
-            adjustButton(symbol: "plus", delta: +0.5)
+            // ±1.0 per tap: one tap ⇒ topicBias ≈ 0.3 × tanh(0.5) ≈ 0.14 — a
+            // visible feed shift. (±0.5 was imperceptible under the tanh squash.)
+            adjustButton(symbol: "minus", delta: -1.0)
+            adjustButton(symbol: "plus", delta: +1.0)
         }
     }
 

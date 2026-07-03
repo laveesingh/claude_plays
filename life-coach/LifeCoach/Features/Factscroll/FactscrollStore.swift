@@ -39,6 +39,22 @@ final class FactscrollStore: ObservableObject {
     /// the "Your taste" panel. Updated whenever taste changes.
     @Published private(set) var topicTaste: [(topic: String, weight: Double)] = []
 
+    /// Number of explicit reactions (likes + dislikes) recorded so far. Published
+    /// so the "Your taste" panel can show taste strength as live evidence.
+    @Published private(set) var reactionCount: Int = 0
+
+    /// The evidence-scaled taste strength currently applied to the feed:
+    /// `min(cap, perReaction × reactionCount)`. Surfaced in the taste panel so the
+    /// user can SEE tuning take hold as they react.
+    var tasteStrength: Double {
+        min(Self.tasteStrengthCap, Self.tasteStrengthPerReaction * Double(reactionCount))
+    }
+
+    /// `tasteStrength` normalised to [0, 1] of its cap, for gauge display.
+    var tasteStrengthFraction: Double {
+        Self.tasteStrengthCap > 0 ? tasteStrength / Self.tasteStrengthCap : 0
+    }
+
     private let generator: FactGenerator
     /// Test/preview override. When nil, `imageService` resolves live from whether
     /// an Unsplash key is present, so adding the key lights up real photos.
@@ -76,10 +92,18 @@ final class FactscrollStore: ObservableObject {
 
     /// How strongly taste can nudge the feed. Starts near 0 and grows with each
     /// explicit reaction; capped so taste NEVER dominates the feed entirely.
-    ///   strength = min(0.35, 0.06 × reactionCount)
-    /// One like → ~0.06 (a whisper). Cap reached at ~6 reactions.
-    private static let tasteStrengthPerReaction = 0.06
-    private static let tasteStrengthCap = 0.35
+    ///   strength = min(0.5, 0.12 × reactionCount)
+    /// One like → ~0.12 (noticeable but gentle); cap reached at ~4 reactions.
+    /// (Was 0.06/0.35 — user feedback: reactions felt like they did nothing.)
+    private static let tasteStrengthPerReaction = 0.12
+    private static let tasteStrengthCap = 0.5
+
+    /// How strongly an EXPLICIT taste-panel topic weight (the +/- controls)
+    /// biases a fact whose topic matches: `topicBiasWeight × tanh(weight / 2)`.
+    /// A couple of taps visibly move the feed; heavy weights saturate instead of
+    /// monopolising. A deliberate user dial deserves more authority than an
+    /// inferred reaction, hence a flat term outside the evidence-scaled blend.
+    private static let topicBiasWeight = 0.3
 
     /// MMR diversity weight. λ=0.7 means picks care 70 % about quality/taste and
     /// 30 % about staying different from already-selected items.
@@ -87,7 +111,9 @@ final class FactscrollStore: ObservableObject {
 
     /// Fraction of kept slots reserved for EXPLORATION — facts least similar to
     /// the taste vector (novelty). Ensures fresh topics always appear.
-    private static let explorationFraction = 0.4
+    /// (Was 0.4 — with almost half the feed reserved for anti-taste picks,
+    /// tuning felt inert. A quarter keeps serendipity without drowning taste.)
+    private static let explorationFraction = 0.25
 
     // MARK: - Persistence shape
 
@@ -140,6 +166,15 @@ final class FactscrollStore: ObservableObject {
         }
     }
 
+    /// The furthest fact index the user has had on screen (fed by
+    /// `bufferIfNeeded(visibleIndex:)`). Post-reaction re-ranks only reorder facts
+    /// strictly AFTER this, so slides already seen never move under the user.
+    private var lastVisibleIndex = 0
+
+    /// Monotonic token so only the LATEST scheduled tail re-rank applies; a rapid
+    /// burst of reactions/panel taps schedules several and stale ones no-op.
+    private var rerankToken = 0
+
     /// Most-recent-first canonical claim keys (exact-match dedup memory).
     private var recentKeys: [String]
     /// Most-recent-first fact embeddings (semantic dedup long memory).
@@ -157,6 +192,7 @@ final class FactscrollStore: ObservableObject {
         embeddingLedger = cached.embeddingLedger
         taste = cached.taste
         topicTaste = cached.taste.topicWeightsSorted()
+        reactionCount = cached.taste.reactionCount
     }
 
     // MARK: - Loading / buffering
@@ -170,6 +206,9 @@ final class FactscrollStore: ObservableObject {
     /// Called as the visible index changes. Tops up when the user is within
     /// `bufferAhead` of the end and we're not already generating.
     func bufferIfNeeded(visibleIndex: Int) async {
+        // Track the furthest slide the user is on, so post-reaction re-ranks never
+        // touch anything at or before it (reordering seen slides breaks scrolling).
+        lastVisibleIndex = max(lastVisibleIndex, visibleIndex)
         guard !isGenerating else { return }
         let remainingAhead = facts.count - 1 - visibleIndex
         guard remainingAhead < Self.bufferAhead else { return }
@@ -289,14 +328,18 @@ final class FactscrollStore: ObservableObject {
     /// ## Algorithm
     ///
     /// **Evidence-scaled strength.**
-    /// `tasteStrength = min(0.35, 0.06 × reactionCount)` — one reaction ≈ 0.06
-    /// (a whisper); cap reached after ~6 reactions. When strength ≈ 0 (no taste
-    /// yet) the function degenerates to "keep the first N" (model order).
+    /// `tasteStrength = min(0.5, 0.12 × reactionCount)` — one reaction ≈ 0.12;
+    /// cap reached after ~4 reactions. With no reactions AND no panel weights
+    /// the function degenerates to "keep the first N" (model order).
     ///
     /// **Blended score per candidate.**
-    /// `tasteScore = (cosine(v, tasteVec) + 1) / 2` in [0, 1] (0 if unembedded).
+    /// `tasteScore = (cosine(v, tasteVec) + 1) / 2` in [0, 1] (neutral 0.5 when
+    /// unembedded or no taste vector yet).
     /// `baseScore` = rank-normalised intrinsic order (first = 1.0, last ≈ 0).
-    /// `blended = (1 − strength) × baseScore + strength × tasteScore`.
+    /// `topicBias = topicBiasWeight × tanh(panelWeight(fact.topic) / 2)` — the
+    /// taste panel's explicit +/- dials, applied directly so manual tuning moves
+    /// the feed even with zero reactions.
+    /// `blended = (1 − strength) × baseScore + strength × tasteScore + topicBias`.
     ///
     /// **MMR selection** (λ = 0.7).
     /// Greedily pick `keep − explorationCount` items maximising
@@ -310,9 +353,10 @@ final class FactscrollStore: ObservableObject {
     /// novelty). Exploration picks are interleaved with taste picks at fixed
     /// positions so fresh topics appear throughout the batch.
     ///
-    /// **Net result:** a single like nudges the feed by ≈ 6 %; a consistent
-    /// pattern over several reactions shifts the mix gradually; the feed always
-    /// stays varied and can never fixate on a single topic.
+    /// **Net result:** a single like visibly nudges the feed (≈ 12 %); a panel
+    /// dial moves matching topics immediately; a consistent pattern over several
+    /// reactions shifts the mix decisively — while MMR diversity and the
+    /// exploration quota keep the feed from fixating on a single topic.
     private func tasteRanked(_ candidates: [(fact: Fact, vector: [Double]?)],
                              keep: Int) -> [(fact: Fact, vector: [Double]?)] {
         guard keep > 0 else { return [] }
@@ -324,8 +368,10 @@ final class FactscrollStore: ObservableObject {
                            Self.tasteStrengthPerReaction * Double(taste.reactionCount))
         let tasteVec = taste.tasteVector()
 
-        // With no strength (or no taste vector at all) just return the first `keep`.
-        guard strength > 1e-6, let tasteVec, !tasteVec.isEmpty else {
+        // Re-rank when there is ANY taste signal: reactions (strength) or explicit
+        // taste-panel topic weights. With neither, keep the model order.
+        let hasPanelSignal = !taste.topicWeightsSorted().isEmpty
+        guard (strength > 1e-6 && tasteVec != nil) || hasPanelSignal else {
             return Array(candidates.prefix(keep))
         }
 
@@ -343,9 +389,17 @@ final class FactscrollStore: ObservableObject {
 
         let scored: [Scored] = candidates.enumerated().map { idx, candidate in
             let baseScore = n > 1 ? 1.0 - Double(idx) / Double(n - 1) : 1.0
-            let rawCosine = candidate.vector.map { EmbeddingService.cosine($0, tasteVec) } ?? 0.0
-            let tasteScore = (rawCosine + 1.0) / 2.0   // map [-1,1] → [0,1]
-            let blended = (1.0 - strength) * baseScore + strength * tasteScore
+            // Neutral 0.5 when there's no vector on either side, so unembedded
+            // facts are neither punished nor boosted by the taste term.
+            let tasteScore: Double
+            if let tasteVec, let v = candidate.vector {
+                tasteScore = (EmbeddingService.cosine(v, tasteVec) + 1.0) / 2.0
+            } else {
+                tasteScore = 0.5
+            }
+            // Explicit panel dial for this fact's topic, saturating via tanh.
+            let topicBias = Self.topicBiasWeight * tanh(taste.weight(forTopic: candidate.fact.topic) / 2.0)
+            let blended = (1.0 - strength) * baseScore + strength * tasteScore + topicBias
             return Scored(index: idx, candidate: candidate, blended: blended,
                           tasteCosineMapped: tasteScore)
         }
@@ -431,6 +485,10 @@ final class FactscrollStore: ObservableObject {
 
         facts[index].reaction = newReaction
         trimAndPersist()
+
+        // Make the reaction feel IMMEDIATE: re-rank the not-yet-seen tail of the
+        // current feed so the very next swipes reflect it — not just the next batch.
+        rerankUpcoming(afterIndex: index)
     }
 
     /// Attach (or clear) a note on a fact. A non-empty note nudges taste.
@@ -442,6 +500,61 @@ final class FactscrollStore: ObservableObject {
             taste.addNote(trimmed, topic: facts[index].topic, factID: fact.id)
         }
         trimAndPersist()
+    }
+
+    // MARK: - Immediate tail re-rank (reaction responsiveness)
+
+    /// Re-rank the not-yet-seen tail of the feed with the just-updated taste, so a
+    /// reaction (or a taste-panel dial) changes what the user swipes to NEXT — not
+    /// only the next generated batch.
+    ///
+    /// Safety properties:
+    ///   - Only facts strictly after both `anchorIndex` (the slide reacted on) and
+    ///     `lastVisibleIndex` (the furthest seen slide) are considered, so nothing
+    ///     the user scrolled past ever moves and scroll position is stable.
+    ///   - Embedding the tail (the expensive part) runs OFF the main actor, same
+    ///     pattern as `InboxStore.computeNudges`; only the cheap `tasteRanked` math
+    ///     and the array splice hop back to the main actor.
+    ///   - The splice applies only if the tail slice is unchanged (id match) and no
+    ///     newer re-rank superseded this one — otherwise it silently no-ops.
+    private func rerankUpcoming(afterIndex anchorIndex: Int) {
+        let start = max(anchorIndex, lastVisibleIndex) + 1
+        guard start >= 0, facts.count - start > 1 else { return }
+        let tail = Array(facts[start...])
+
+        rerankToken += 1
+        let token = rerankToken
+        let texts = tail.map(\.text)
+        let ids = tail.map(\.id)
+
+        Task { [weak self] in
+            let vectors = await Self.embedOffMain(texts)
+            guard let self, self.rerankToken == token else { return }
+            self.applyRerankedTail(ids: ids, vectors: vectors, from: start)
+        }
+    }
+
+    /// Embed each text on the global executor (nonisolated ⇒ off the main actor),
+    /// keeping the heavy `NLEmbedding` work out of the render loop.
+    private nonisolated static func embedOffMain(_ texts: [String]) async -> [[Double]?] {
+        texts.map { EmbeddingService.shared.vector(for: $0) }
+    }
+
+    /// Hop-back half of `rerankUpcoming`: verify the tail is untouched and unseen,
+    /// then splice in the taste-ranked order. Uses the LIVE fact values (not the
+    /// captured snapshot) so any interim mutations (notes, reactions) survive.
+    private func applyRerankedTail(ids: [UUID], vectors: [[Double]?], from start: Int) {
+        let end = start + ids.count
+        guard end <= facts.count else { return }
+        let range = start..<end
+        let current = Array(facts[range])
+        guard current.map(\.id) == ids else { return }      // feed shifted — skip
+        guard start > lastVisibleIndex else { return }       // user caught up — skip
+
+        let candidates = zip(current, vectors).map { (fact: $0, vector: $1) }
+        let ranked = tasteRanked(candidates, keep: candidates.count)
+        guard ranked.count == candidates.count else { return }
+        facts.replaceSubrange(range, with: ranked.map(\.fact))
     }
 
     // MARK: - Images
@@ -471,6 +584,8 @@ final class FactscrollStore: ObservableObject {
         taste.adjust(topic: topic, by: delta)
         topicTaste = taste.topicWeightsSorted()
         trimAndPersist()
+        // A panel dial should also move the CURRENT feed, not just the next batch.
+        rerankUpcoming(afterIndex: lastVisibleIndex)
     }
 
     /// Full taste reset: clears all embedding sets, topic weights, and notes.
@@ -494,8 +609,9 @@ final class FactscrollStore: ObservableObject {
         if embeddingLedger.count > Self.embeddingLedgerCap {
             embeddingLedger.removeLast(embeddingLedger.count - Self.embeddingLedgerCap)
         }
-        // Keep the published topicTaste in sync whenever we save.
+        // Keep the published taste snapshots in sync whenever we save.
         topicTaste = taste.topicWeightsSorted()
+        reactionCount = taste.reactionCount
         fileStore.save(Persisted(facts: facts,
                                  recentKeys: recentKeys,
                                  embeddingLedger: embeddingLedger,
