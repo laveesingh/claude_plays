@@ -176,6 +176,105 @@ enum NotificationManager {
     static func cancelAll() {
         UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
     }
+
+    // MARK: - Inbox watch (M5)
+
+    /// Fires a local notification summarising newly-arrived important mail. De-duplication
+    /// (so the same message never triggers two banners) is the caller's responsibility —
+    /// `InboxStore.backgroundRefresh()` tracks notified IDs and only passes truly new items.
+    ///
+    /// The notification body names the top two senders / subjects so the user knows at a
+    /// glance whether it's worth opening the app.
+    ///
+    /// - Parameters:
+    ///   - items: Newly-arrived important classified emails (caller guarantees non-empty).
+    static func fireImportantMailAlert(for items: [ClassifiedEmail]) {
+        guard !items.isEmpty else { return }
+
+        let content = UNMutableNotificationContent()
+        content.sound = .default
+
+        let count = items.count
+        if count == 1 {
+            let item = items[0]
+            content.title = "New message from \(item.email.senderName)"
+            content.body = item.email.subject.isEmpty ? item.email.snippet : item.email.subject
+        } else {
+            content.title = "\(count) things need your attention"
+            // Name the top two senders.
+            let top = items.prefix(2).map { $0.email.senderName }.joined(separator: " + ")
+            let extra = count > 2 ? " and \(count - 2) more" : ""
+            content.body = "\(top)\(extra)"
+        }
+
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(
+                identifier: "inbox-alert-\(UUID().uuidString)",
+                content: content,
+                trigger: nil  // deliver immediately
+            )
+        )
+    }
+
+    /// Schedules (or cancels) the repeating daily inbox-brief notification. Removes any
+    /// previously scheduled daily-brief request so a changed hour takes effect at once.
+    ///
+    /// - Parameters:
+    ///   - hour: The hour (0–23) to fire, or nil to cancel.
+    ///   - brief: The brief line to use as the notification body.
+    static func scheduleInboxDailyBrief(hour: Int?, brief: String) {
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: ["inbox-daily-brief"])
+        guard let hour else { return }
+
+        let content = UNMutableNotificationContent()
+        content.title = "Daily inbox brief"
+        content.body = brief.isEmpty ? "Your inbox summary is ready." : brief
+        content.sound = .default
+
+        var comps = DateComponents()
+        comps.hour = hour
+        comps.minute = 0
+        center.add(UNNotificationRequest(
+            identifier: "inbox-daily-brief",
+            content: content,
+            trigger: UNCalendarNotificationTrigger(dateMatching: comps, repeats: true)
+        ))
+    }
+
+    /// Schedules (or re-schedules) the repeating weekly inbox-recap notification,
+    /// firing every Sunday at 7 PM. The body summarises the week's sender activity
+    /// drawn from `SenderMemory` — specifically how many unique senders were seen,
+    /// how many opened vs archived.
+    ///
+    /// - Parameter senderMemory: The store's current sender stats.
+    static func scheduleInboxWeeklyRecap(senderMemory: SenderMemory) {
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: ["inbox-weekly-recap"])
+
+        let totalSenders = senderMemory.senders.count
+        let opened = senderMemory.senders.values.filter { $0.opened > 0 }.count
+        let ignored = senderMemory.senders.values.filter { $0.opened == 0 && $0.archived > 0 }.count
+
+        let content = UNMutableNotificationContent()
+        content.title = "Weekly inbox recap"
+        if totalSenders == 0 {
+            content.body = "Your inbox week in review is ready."
+        } else {
+            content.body = "Opened from \(opened) senders, silently filed \(ignored). Tap to review."
+        }
+        content.sound = .default
+
+        var comps = DateComponents()
+        comps.weekday = 1   // Sunday
+        comps.hour = 19     // 7 PM
+        comps.minute = 0
+        center.add(UNNotificationRequest(
+            identifier: "inbox-weekly-recap",
+            content: content,
+            trigger: UNCalendarNotificationTrigger(dateMatching: comps, repeats: true)
+        ))
+    }
 }
 
 /// Routes notification taps and lock-screen actions back into app state.

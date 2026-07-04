@@ -29,6 +29,8 @@ struct StructuredInputView: View {
             if let prompt = request.prompt, !prompt.isEmpty {
                 Text(prompt)
                     .font(.subheadline.weight(.semibold))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             ForEach(request.fields) { field in
                 VStack(alignment: .leading, spacing: 10) {
@@ -36,6 +38,8 @@ struct StructuredInputView: View {
                         Text(field.label)
                             .font(.footnote.weight(.medium))
                             .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     fieldControl(field)
                 }
@@ -227,7 +231,8 @@ struct StructuredInputView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(block.title)
                                 .font(.subheadline.weight(.medium))
-                                .lineLimit(1)
+                                .lineLimit(2)
+                                .truncationMode(.tail)
                             Text(block.timeRangeLabel)
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)

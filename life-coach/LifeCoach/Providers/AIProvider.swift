@@ -152,6 +152,13 @@ protocol ChatProvider: AnyObject {
 
     /// Append executed tool results for the next round.
     func appendToolResults(_ results: [AgentToolResult])
+
+    /// One-shot, non-streaming request/response - no tools, no transcript
+    /// bookkeeping. The general-purpose primitive every AI feature (Inbox
+    /// classifier, News, Factscroll) uses for a simple prompt -> text call. This
+    /// is independent of the streaming agent loop above and does not touch its
+    /// internal message state.
+    func complete(systemPrompt: String, userText: String, model: String) async throws -> String
 }
 
 /// Shared error surfaced to the UI.
