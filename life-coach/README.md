@@ -50,11 +50,12 @@ Daily morning/evening pings and a Sunday weekly-review ping are standing.
 
 ## Local utility: Qubo bulbs
 
-The **Bulbs** tab scans for powered Qubo HLB10 smart bulbs while the page is open. It reads
-their advertised hardware identity and vendor state over Bluetooth, keeps custom names by MAC,
-and stores an optional recovery Wi-Fi password in the device Keychain. The current state mapping
-is deliberately narrow: observed `S_01` bulbs need setup, observed `S_06` bulbs report a
-configured state, and other values remain unknown.
+The **Bulbs** tab stays idle until you tap **Start scan**. A scan records each powered Qubo
+HLB10 bulb once; **Stop** and **Clear** remain explicit. Each bulb also has a separate **Read
+details** action that makes one bounded Bluetooth connection, reads the vendor fields, and then
+disconnects. The tab keeps custom names by MAC and stores an optional recovery Wi-Fi password
+in the device Keychain. The state mapping is deliberately narrow: observed `S_01` bulbs need
+setup, observed `S_06` bulbs report a configured state, and other values remain unknown.
 
 Wi-Fi reprovisioning, Qubo cloud binding, and light controls are not enabled. Qubo does not
 publish those Bluetooth payloads, and an official-app pairing capture is required before the app
