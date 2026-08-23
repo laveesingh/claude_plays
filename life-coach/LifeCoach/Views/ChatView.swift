@@ -19,24 +19,24 @@ struct ChatView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                if !engine.hasAPIKey {
-                    missingKeyBanner
-                }
-                messageList
-                if let error = engine.lastError {
-                    Text(error)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                        .padding(.horizontal)
-                        .padding(.bottom, 4)
-                }
-                inputBar
+        VStack(spacing: 0) {
+            if !engine.hasAPIKey {
+                missingKeyBanner
             }
-            .navigationTitle("Coach")
-            .navigationBarTitleDisplayMode(.inline)
+            messageList
+            if let error = engine.lastError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal)
+                    .padding(.bottom, 4)
+            }
+            inputBar
         }
+        .navigationTitle("Coach")
+        .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showVoice) {
             VoiceInputView(voice: voice) { finalText in
                 showVoice = false
@@ -54,7 +54,7 @@ struct ChatView: View {
 
     private var missingKeyBanner: some View {
         Button {
-            router.selectedTab = .settings
+            router.showSettings = true
         } label: {
             Label("Add your \(store.state.ai.provider.keyLabel) in Settings to activate your coach",
                   systemImage: "key.fill")
@@ -129,10 +129,12 @@ struct ChatView: View {
                 .foregroundStyle(.secondary)
             Text("Your coach is on the clock.")
                 .font(.headline)
+                .multilineTextAlignment(.center)
             Text("Start a morning check-in from the Today tab, or just say what's on your mind.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.top, 80)
         .padding(.horizontal, 32)
@@ -181,6 +183,7 @@ struct ChatView: View {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.title2)
             }
+            .accessibilityLabel("Send")
             .disabled(engine.isResponding || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
         .padding(.horizontal)

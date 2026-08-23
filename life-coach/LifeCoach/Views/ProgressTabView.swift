@@ -5,15 +5,13 @@ struct ProgressTabView: View {
     @EnvironmentObject private var store: AppStore
 
     var body: some View {
-        NavigationStack {
-            List {
-                executionSection
-                metricsSection
-                reportsSection
-                dossierSection
-            }
-            .navigationTitle("Progress")
+        List {
+            executionSection
+            metricsSection
+            reportsSection
+            dossierSection
         }
+        .navigationTitle("Progress")
     }
 
     private var executionSection: some View {
@@ -45,7 +43,9 @@ struct ProgressTabView: View {
                 HStack {
                     Text(habit.title)
                         .font(.subheadline)
-                    Spacer()
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Spacer(minLength: 8)
                     Text("\(adherence.done)/\(adherence.scheduled)")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(adherenceColor(adherence))
@@ -67,12 +67,16 @@ struct ProgressTabView: View {
             if store.state.metrics.isEmpty {
                 Text("Nothing logged yet. Report measurements to your coach — weight, run times, deep-work hours — and trends show up here.")
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             } else {
                 ForEach(store.state.metrics) { series in
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
-                            Text(series.name).font(.headline)
-                            Spacer()
+                            Text(series.name)
+                                .font(.headline)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                            Spacer(minLength: 8)
                             if let latest = series.samples.last {
                                 Text("\(latest.value, format: .number.precision(.fractionLength(0...1))) \(series.unit)")
                                     .font(.subheadline.weight(.semibold))
@@ -103,19 +107,25 @@ struct ProgressTabView: View {
             if store.state.weeklyReports.isEmpty {
                 Text("Your coach writes a report card at every weekly review.")
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             } else {
                 ForEach(store.state.weeklyReports.reversed()) { report in
                     NavigationLink {
                         ScrollView {
                             Text(report.content)
                                 .frame(maxWidth: .infinity, alignment: .leading)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .textSelection(.enabled)
                                 .padding()
                         }
                         .navigationTitle(report.title)
                         .navigationBarTitleDisplayMode(.inline)
                     } label: {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(report.title).font(.subheadline.weight(.medium))
+                            Text(report.title)
+                                .font(.subheadline.weight(.medium))
+                                .lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
                             Text(report.date, style: .date)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -131,12 +141,15 @@ struct ProgressTabView: View {
             if store.state.coachMemory.isEmpty {
                 Text("Empty so far. The coach fills this in during intake and as it learns about you.")
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             } else {
                 ForEach(store.state.coachMemory) { section in
                     DisclosureGroup(section.title) {
                         Text(section.content)
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
             }

@@ -7,3 +7,5 @@ build/
 *.dSYM.zip
 *.dSYM
 .swiftpm/
+.env
+*.env

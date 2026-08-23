@@ -1,24 +1,110 @@
 import SwiftUI
+import AuthenticationServices
 
 struct SettingsView: View {
     @EnvironmentObject private var store: AppStore
     @EnvironmentObject private var engine: CoachEngine
+    @EnvironmentObject private var googleAuth: GoogleAuth
 
     @State private var showingResetConfirm = false
+    @State private var connectingGmail = false
+    @State private var gmailError: String?
 
     var body: some View {
         NavigationStack {
             Form {
+                aboutSection
                 aiSection
                 APIKeyField(provider: .ollama)
                 APIKeyField(provider: .claude)
+                UnsplashKeyField()
+                NewsDataKeyField()
+                gmailSection
                 coachSection
                 integrationsSection
                 scheduleSection
                 dangerSection
             }
             .navigationTitle("Settings")
+            .alert("Gmail", isPresented: Binding(get: { gmailError != nil }, set: { if !$0 { gmailError = nil } })) {
+                Button("OK", role: .cancel) { gmailError = nil }
+            } message: {
+                Text(gmailError ?? "")
+            }
         }
+    }
+
+    private var gmailSection: some View {
+        Section {
+            if googleAuth.isSignedIn {
+                HStack {
+                    Label("Gmail connected", systemImage: "checkmark.seal.fill")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Disconnect", role: .destructive) { googleAuth.signOut() }
+                }
+            } else {
+                Button {
+                    Task { await connectGmail() }
+                } label: {
+                    HStack {
+                        Label("Connect Gmail", systemImage: "link")
+                        if connectingGmail {
+                            Spacer()
+                            ProgressView()
+                        }
+                    }
+                }
+                .disabled(connectingGmail)
+            }
+        } header: {
+            Text("Inbox (Gmail)")
+        } footer: {
+            Text("Read-only access to triage your last 2 days of mail. Tokens are stored only in this device's Keychain; disconnect anytime.")
+        }
+    }
+
+    private func connectGmail() async {
+        connectingGmail = true
+        defer { connectingGmail = false }
+        do {
+            try await googleAuth.signIn()
+        } catch {
+            let nsError = error as NSError
+            if nsError.domain == ASWebAuthenticationSessionErrorDomain,
+               nsError.code == ASWebAuthenticationSessionError.canceledLogin.rawValue {
+                return
+            }
+            gmailError = error.localizedDescription
+        }
+    }
+
+    private var aboutSection: some View {
+        Section {
+            HStack {
+                Label("Sapiod", systemImage: "sparkles")
+                    .labelStyle(.titleAndIcon)
+                    .fontWeight(.semibold)
+                Spacer()
+                Text("\(appVersion) (\(appBuild))")
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+        } footer: {
+            Text("Build \(appBuild) — auto-stamped at build time (year.monthday.hourminute) so you always know which binary is on the device.")
+        }
+    }
+
+    /// Marketing version, e.g. "1.0".
+    private var appVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
+    }
+
+    /// Build number — stamped to a timestamp on every build by the "Stamp build
+    /// number" run-script phase.
+    private var appBuild: String {
+        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "—"
     }
 
     private var aiSection: some View {
@@ -44,6 +130,7 @@ struct SettingsView: View {
             Text(intensityBinding.wrappedValue.summary)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -79,6 +166,7 @@ struct SettingsView: View {
             Text("Weekly review pings every Sunday. Block check-ins are scheduled automatically with each day's plan.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -211,6 +299,97 @@ private struct APIKeyField: View {
             Text(provider.keyLabel)
         } footer: {
             Text(provider.keyFooter)
+        }
+    }
+}
+
+/// Unsplash access-key entry — same edit-protected pattern as `APIKeyField`, but
+/// backed by the Keychain's named-secret store. When set, Factscroll pulls real
+/// cover photos for each fact's topic; with no key it falls back to gradients.
+private struct UnsplashKeyField: View {
+    @State private var editing = false
+    @State private var draft = ""
+
+    var body: some View {
+        Section {
+            if editing {
+                SecureField("Unsplash Access Key", text: $draft)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                HStack {
+                    Button("Save") {
+                        KeychainHelper.save(draft.trimmingCharacters(in: .whitespacesAndNewlines),
+                                            secret: .unsplash)
+                        editing = false
+                    }
+                    Spacer()
+                    Button("Cancel", role: .cancel) {
+                        editing = false
+                        draft = ""
+                    }
+                }
+            } else {
+                HStack {
+                    Label(KeychainHelper.hasKey(secret: .unsplash) ? "Key saved" : "No key set",
+                          systemImage: KeychainHelper.hasKey(secret: .unsplash) ? "checkmark.seal.fill" : "photo")
+                        .foregroundStyle(KeychainHelper.hasKey(secret: .unsplash) ? Color.secondary : Color.orange)
+                    Spacer()
+                    Button("Edit") {
+                        draft = KeychainHelper.load(secret: .unsplash) ?? ""
+                        editing = true
+                    }
+                }
+            }
+        } header: {
+            Text("Unsplash (Factscroll photos)")
+        } footer: {
+            Text("Gives Factscroll real cover photos per topic. Create a free key at unsplash.com/developers → New Application → Access Key. Stored only in this device's Keychain. Takes effect on next launch.")
+        }
+    }
+}
+
+/// NewsData.io API-key entry — same edit-protected pattern as `UnsplashKeyField`,
+/// backed by the Keychain's named-secret store. Optional: when set, News adds a
+/// fourth, full-text source on top of the three keyless ones (Google News RSS,
+/// GDELT, web search).
+private struct NewsDataKeyField: View {
+    @State private var editing = false
+    @State private var draft = ""
+
+    var body: some View {
+        Section {
+            if editing {
+                SecureField("NewsData.io API Key", text: $draft)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                HStack {
+                    Button("Save") {
+                        KeychainHelper.save(draft.trimmingCharacters(in: .whitespacesAndNewlines),
+                                            secret: .newsDataKey)
+                        editing = false
+                    }
+                    Spacer()
+                    Button("Cancel", role: .cancel) {
+                        editing = false
+                        draft = ""
+                    }
+                }
+            } else {
+                HStack {
+                    Label(KeychainHelper.hasKey(secret: .newsDataKey) ? "Key saved" : "No key set",
+                          systemImage: KeychainHelper.hasKey(secret: .newsDataKey) ? "checkmark.seal.fill" : "newspaper")
+                        .foregroundStyle(KeychainHelper.hasKey(secret: .newsDataKey) ? Color.secondary : Color.orange)
+                    Spacer()
+                    Button("Edit") {
+                        draft = KeychainHelper.load(secret: .newsDataKey) ?? ""
+                        editing = true
+                    }
+                }
+            }
+        } header: {
+            Text("News (NewsData.io)")
+        } footer: {
+            Text("Optional. Adds a fourth news source with full-text search. Get a free key at newsdata.io → Dashboard → API Key. Works without a key — the other sources (Google News RSS, GDELT, web search) run without one.")
         }
     }
 }
