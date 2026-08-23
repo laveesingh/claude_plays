@@ -2,6 +2,8 @@ import Combine
 import CoreBluetooth
 import Foundation
 
+/// A deliberately manual BLE client. Nothing scans or connects until the user
+/// taps the matching control in the Bulbs tab.
 final class QuboBulbManager: NSObject, ObservableObject {
     enum RadioState: Equatable {
         case idle
@@ -14,7 +16,7 @@ final class QuboBulbManager: NSObject, ObservableObject {
 
         var title: String {
             switch self {
-            case .idle: return "Ready to scan"
+            case .idle: return "Bluetooth idle"
             case .preparing: return "Preparing Bluetooth…"
             case .ready: return "Bluetooth ready"
             case .poweredOff: return "Bluetooth is off"
@@ -29,6 +31,10 @@ final class QuboBulbManager: NSObject, ObservableObject {
     @Published private(set) var radioState: RadioState = .idle
     @Published private(set) var isScanning = false
 
+    var hasActiveRead: Bool {
+        bulbs.contains { $0.connectionPhase == .connecting || $0.connectionPhase == .reading }
+    }
+
     private let quboService = CBUUID(string: "00DD")
     private let modelCharacteristic = CBUUID(string: "DD01")
     private let lightStateCharacteristic = CBUUID(string: "DD02")
@@ -36,17 +42,18 @@ final class QuboBulbManager: NSObject, ObservableObject {
     private let mirroredStateCharacteristic = CBUUID(string: "DD04")
 
     private var central: CBCentralManager?
-    private var shouldScan = false
+    private var scanRequested = false
     private var peripheralsByHardwareID: [String: CBPeripheral] = [:]
     private var hardwareIDByPeripheralID: [UUID: String] = [:]
-    private var connectingPeripheralIDs = Set<UUID>()
-    private var staleTimer: Timer?
+    private var pendingReads: [UUID: Set<CBUUID>] = [:]
+    private var readTimeouts: [UUID: DispatchWorkItem] = [:]
 
     func startScanning() {
-        shouldScan = true
-        radioState = .preparing
+        guard !isScanning, !hasActiveRead else { return }
+        scanRequested = true
 
         if central == nil {
+            radioState = .preparing
             central = CBCentralManager(
                 delegate: self,
                 queue: .main,
@@ -58,58 +65,122 @@ final class QuboBulbManager: NSObject, ObservableObject {
     }
 
     func stopScanning() {
-        shouldScan = false
+        scanRequested = false
         central?.stopScan()
         isScanning = false
-        staleTimer?.invalidate()
-        staleTimer = nil
+    }
 
-        for peripheral in peripheralsByHardwareID.values where peripheral.state != .disconnected {
+    func clearResults() {
+        stopAllActivity()
+        bulbs.removeAll()
+        peripheralsByHardwareID.removeAll()
+        hardwareIDByPeripheralID.removeAll()
+    }
+
+    func readDetails(for hardwareID: String) {
+        guard !isScanning, !hasActiveRead,
+              let central,
+              let peripheral = peripheralsByHardwareID[hardwareID] else { return }
+
+        peripheral.delegate = self
+        hardwareIDByPeripheralID[peripheral.identifier] = hardwareID
+        mutateBulb(hardwareID: hardwareID) {
+            $0.connectionPhase = .connecting
+            $0.errorMessage = nil
+        }
+
+        switch peripheral.state {
+        case .connected:
+            discoverDetails(on: peripheral)
+        case .disconnected:
+            central.connect(peripheral)
+        case .connecting:
+            break
+        case .disconnecting:
+            mutateBulb(hardwareID: hardwareID) {
+                $0.connectionPhase = .failed
+                $0.errorMessage = "The bulb is disconnecting. Try Read details again."
+            }
+        @unknown default:
+            break
+        }
+    }
+
+    func cancelRead(for hardwareID: String) {
+        guard let peripheral = peripheralsByHardwareID[hardwareID] else { return }
+        finishRead(on: peripheral, phase: .disconnected, error: nil)
+    }
+
+    /// Used only when leaving the page or clearing results. It prevents Sapiod
+    /// from holding bulb connections while the utility is not visible.
+    func stopAllActivity() {
+        stopScanning()
+        for workItem in readTimeouts.values { workItem.cancel() }
+        readTimeouts.removeAll()
+        pendingReads.removeAll()
+        for (hardwareID, peripheral) in peripheralsByHardwareID where peripheral.state != .disconnected {
+            mutateBulb(hardwareID: hardwareID) {
+                $0.connectionPhase = .disconnected
+                $0.errorMessage = nil
+            }
             central?.cancelPeripheralConnection(peripheral)
         }
     }
 
-    func restartScanning() {
-        stopScanning()
-        bulbs.removeAll()
-        peripheralsByHardwareID.removeAll()
-        hardwareIDByPeripheralID.removeAll()
-        connectingPeripheralIDs.removeAll()
-        startScanning()
-    }
-
     private func beginScanIfPossible() {
-        guard shouldScan, let central else { return }
+        guard scanRequested, let central else { return }
         guard central.state == .poweredOn else {
             updateRadioState(for: central.state)
             return
         }
 
-        central.stopScan()
+        // One callback per peripheral per manual scan. Repeated RSSI broadcasts
+        // must not drive continuous SwiftUI updates.
         central.scanForPeripherals(
             withServices: nil,
-            options: [CBCentralManagerScanOptionAllowDuplicatesKey: true]
+            options: [CBCentralManagerScanOptionAllowDuplicatesKey: false]
         )
         radioState = .ready
         isScanning = true
-        startStaleTimer()
     }
 
-    private func startStaleTimer() {
-        staleTimer?.invalidate()
-        staleTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
-            self?.removeStaleDisconnectedBulbs()
-        }
+    private func discoverDetails(on peripheral: CBPeripheral) {
+        guard let hardwareID = hardwareIDByPeripheralID[peripheral.identifier] else { return }
+        mutateBulb(hardwareID: hardwareID) { $0.connectionPhase = .reading }
+        peripheral.discoverServices([quboService])
+        scheduleReadTimeout(for: peripheral)
     }
 
-    private func removeStaleDisconnectedBulbs(now: Date = Date()) {
-        let staleIDs = bulbs.compactMap { bulb -> String? in
-            guard now.timeIntervalSince(bulb.lastSeen) > 12 else { return nil }
-            let peripheral = peripheralsByHardwareID[bulb.id]
-            return peripheral?.state == .connected || peripheral?.state == .connecting ? nil : bulb.id
+    private func scheduleReadTimeout(for peripheral: CBPeripheral) {
+        readTimeouts[peripheral.identifier]?.cancel()
+        let workItem = DispatchWorkItem { [weak self, weak peripheral] in
+            guard let self, let peripheral else { return }
+            self.finishRead(
+                on: peripheral,
+                phase: .failed,
+                error: "The bulb did not finish the read within 8 seconds."
+            )
         }
-        guard !staleIDs.isEmpty else { return }
-        bulbs.removeAll { staleIDs.contains($0.id) }
+        readTimeouts[peripheral.identifier] = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8, execute: workItem)
+    }
+
+    private func finishRead(
+        on peripheral: CBPeripheral,
+        phase: QuboConnectionPhase,
+        error: String?
+    ) {
+        readTimeouts.removeValue(forKey: peripheral.identifier)?.cancel()
+        pendingReads.removeValue(forKey: peripheral.identifier)
+        if let hardwareID = hardwareIDByPeripheralID[peripheral.identifier] {
+            mutateBulb(hardwareID: hardwareID) {
+                $0.connectionPhase = phase
+                $0.errorMessage = error
+            }
+        }
+        if peripheral.state != .disconnected {
+            central?.cancelPeripheralConnection(peripheral)
+        }
     }
 
     private func updateRadioState(for state: CBManagerState) {
@@ -146,7 +217,7 @@ final class QuboBulbManager: NSObject, ObservableObject {
 extension QuboBulbManager: CBCentralManagerDelegate {
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         updateRadioState(for: central.state)
-        if central.state == .poweredOn { beginScanIfPossible() }
+        if central.state == .poweredOn, scanRequested { beginScanIfPossible() }
     }
 
     func centralManager(
@@ -163,14 +234,12 @@ extension QuboBulbManager: CBCentralManagerDelegate {
         let hardwareID = advertisement.hardwareID
         peripheralsByHardwareID[hardwareID] = peripheral
         hardwareIDByPeripheralID[peripheral.identifier] = hardwareID
-        peripheral.delegate = self
 
         if let index = bulbs.firstIndex(where: { $0.id == hardwareID }) {
             var bulb = bulbs[index]
             bulb.advertisement = advertisement
             bulb.rssi = RSSI.intValue
             bulb.lastSeen = Date()
-            bulb.errorMessage = nil
             bulbs[index] = bulb
         } else {
             bulbs.append(QuboBulbSnapshot(
@@ -178,34 +247,12 @@ extension QuboBulbManager: CBCentralManagerDelegate {
                 rssi: RSSI.intValue,
                 lastSeen: Date()
             ))
-        }
-
-        switch peripheral.state {
-        case .connected:
-            mutateBulb(hardwareID: hardwareID) { $0.connectionPhase = .reading }
-            peripheral.discoverServices([quboService])
-        case .connecting:
-            mutateBulb(hardwareID: hardwareID) { $0.connectionPhase = .connecting }
-        case .disconnected:
-            guard !connectingPeripheralIDs.contains(peripheral.identifier) else { return }
-            connectingPeripheralIDs.insert(peripheral.identifier)
-            mutateBulb(hardwareID: hardwareID) { $0.connectionPhase = .connecting }
-            central.connect(peripheral)
-        case .disconnecting:
-            mutateBulb(hardwareID: hardwareID) { $0.connectionPhase = .disconnected }
-        @unknown default:
-            break
+            bulbs.sort { $0.id < $1.id }
         }
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
-        connectingPeripheralIDs.remove(peripheral.identifier)
-        guard let hardwareID = hardwareIDByPeripheralID[peripheral.identifier] else { return }
-        mutateBulb(hardwareID: hardwareID) {
-            $0.connectionPhase = .reading
-            $0.errorMessage = nil
-        }
-        peripheral.discoverServices([quboService])
+        discoverDetails(on: peripheral)
     }
 
     func centralManager(
@@ -213,12 +260,11 @@ extension QuboBulbManager: CBCentralManagerDelegate {
         didFailToConnect peripheral: CBPeripheral,
         error: Error?
     ) {
-        connectingPeripheralIDs.remove(peripheral.identifier)
-        guard let hardwareID = hardwareIDByPeripheralID[peripheral.identifier] else { return }
-        mutateBulb(hardwareID: hardwareID) {
-            $0.connectionPhase = .failed
-            $0.errorMessage = error?.localizedDescription ?? "Could not connect over Bluetooth."
-        }
+        finishRead(
+            on: peripheral,
+            phase: .failed,
+            error: error?.localizedDescription ?? "Could not connect over Bluetooth."
+        )
     }
 
     func centralManager(
@@ -226,31 +272,27 @@ extension QuboBulbManager: CBCentralManagerDelegate {
         didDisconnectPeripheral peripheral: CBPeripheral,
         error: Error?
     ) {
-        connectingPeripheralIDs.remove(peripheral.identifier)
-        guard let hardwareID = hardwareIDByPeripheralID[peripheral.identifier] else { return }
+        guard let error,
+              let hardwareID = hardwareIDByPeripheralID[peripheral.identifier] else { return }
         mutateBulb(hardwareID: hardwareID) {
-            $0.connectionPhase = error == nil ? .disconnected : .failed
-            $0.errorMessage = error?.localizedDescription
+            $0.connectionPhase = .failed
+            $0.errorMessage = error.localizedDescription
         }
     }
 }
 
 extension QuboBulbManager: CBPeripheralDelegate {
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
-        guard let hardwareID = hardwareIDByPeripheralID[peripheral.identifier] else { return }
         if let error {
-            mutateBulb(hardwareID: hardwareID) {
-                $0.connectionPhase = .failed
-                $0.errorMessage = error.localizedDescription
-            }
+            finishRead(on: peripheral, phase: .failed, error: error.localizedDescription)
             return
         }
-
         guard let service = peripheral.services?.first(where: { $0.uuid == quboService }) else {
-            mutateBulb(hardwareID: hardwareID) {
-                $0.connectionPhase = .failed
-                $0.errorMessage = "The Qubo data service was not found."
-            }
+            finishRead(
+                on: peripheral,
+                phase: .failed,
+                error: "The Qubo data service was not found."
+            )
             return
         }
 
@@ -265,26 +307,21 @@ extension QuboBulbManager: CBPeripheralDelegate {
         didDiscoverCharacteristicsFor service: CBService,
         error: Error?
     ) {
-        guard let hardwareID = hardwareIDByPeripheralID[peripheral.identifier] else { return }
         if let error {
-            mutateBulb(hardwareID: hardwareID) {
-                $0.connectionPhase = .failed
-                $0.errorMessage = error.localizedDescription
-            }
+            finishRead(on: peripheral, phase: .failed, error: error.localizedDescription)
             return
         }
 
-        let characteristics = service.characteristics ?? []
-        for characteristic in characteristics {
-            if characteristic.properties.contains(.read) {
-                peripheral.readValue(for: characteristic)
-            }
-            if characteristic.properties.contains(.notify) {
-                peripheral.setNotifyValue(true, for: characteristic)
-            }
+        let readable = (service.characteristics ?? []).filter { $0.properties.contains(.read) }
+        guard !readable.isEmpty else {
+            finishRead(on: peripheral, phase: .failed, error: "No readable Qubo details were found.")
+            return
         }
 
-        mutateBulb(hardwareID: hardwareID) { $0.connectionPhase = .ready }
+        pendingReads[peripheral.identifier] = Set(readable.map(\.uuid))
+        for characteristic in readable {
+            peripheral.readValue(for: characteristic)
+        }
     }
 
     func peripheral(
@@ -294,25 +331,30 @@ extension QuboBulbManager: CBPeripheralDelegate {
     ) {
         guard let hardwareID = hardwareIDByPeripheralID[peripheral.identifier] else { return }
         if let error {
-            mutateBulb(hardwareID: hardwareID) { $0.errorMessage = error.localizedDescription }
+            finishRead(on: peripheral, phase: .failed, error: error.localizedDescription)
             return
         }
-        guard let value = text(from: characteristic) else { return }
 
-        mutateBulb(hardwareID: hardwareID) { bulb in
-            switch characteristic.uuid {
-            case modelCharacteristic:
-                bulb.model = value
-            case lightStateCharacteristic:
-                bulb.rawLightState = value
-            case deviceStateCharacteristic:
-                bulb.rawState = value
-            case mirroredStateCharacteristic:
-                if bulb.rawLightState == nil { bulb.rawLightState = value }
-            default:
-                break
+        if let value = text(from: characteristic) {
+            mutateBulb(hardwareID: hardwareID) { bulb in
+                switch characteristic.uuid {
+                case modelCharacteristic:
+                    bulb.model = value
+                case lightStateCharacteristic:
+                    bulb.rawLightState = value
+                case deviceStateCharacteristic:
+                    bulb.rawState = value
+                case mirroredStateCharacteristic:
+                    if bulb.rawLightState == nil { bulb.rawLightState = value }
+                default:
+                    break
+                }
             }
-            bulb.connectionPhase = .ready
+        }
+
+        pendingReads[peripheral.identifier]?.remove(characteristic.uuid)
+        if pendingReads[peripheral.identifier]?.isEmpty == true {
+            finishRead(on: peripheral, phase: .ready, error: nil)
         }
     }
 }

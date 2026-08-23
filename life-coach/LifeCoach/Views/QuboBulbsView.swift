@@ -27,22 +27,11 @@ struct QuboBulbsView: View {
                 localControlsSection
             }
             .navigationTitle("Bulbs")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        manager.restartScanning()
-                    } label: {
-                        Label("Scan again", systemImage: "arrow.clockwise")
-                    }
-                    .disabled(manager.radioState == .unauthorized || manager.radioState == .unsupported)
-                }
-            }
             .onAppear {
                 ssidDraft = preferences.wifiSSID
-                manager.startScanning()
             }
             .onDisappear {
-                manager.stopScanning()
+                manager.stopAllActivity()
             }
             .onChange(of: manager.bulbs) { _, bulbs in
                 for bulb in bulbs { preferences.record(bulb) }
@@ -65,12 +54,35 @@ struct QuboBulbsView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                if manager.isScanning {
-                    ProgressView()
+                if manager.isScanning { ProgressView() }
+            }
+
+            HStack {
+                Button {
+                    manager.startScanning()
+                } label: {
+                    Label("Start scan", systemImage: "play.fill")
                 }
+                .buttonStyle(.borderedProminent)
+                .disabled(manager.isScanning || manager.hasActiveRead || scanIsUnavailable)
+
+                Button {
+                    manager.stopScanning()
+                } label: {
+                    Label("Stop", systemImage: "stop.fill")
+                }
+                .buttonStyle(.bordered)
+                .disabled(!manager.isScanning)
+
+                Spacer()
+
+                Button("Clear", role: .destructive) {
+                    manager.clearResults()
+                }
+                .disabled(manager.isScanning || manager.bulbs.isEmpty)
             }
         } footer: {
-            Text("Scanning runs only while this page is open. It reads Qubo identity and state but sends no bulb commands.")
+            Text("Nothing starts automatically. Start scan reports each nearby bulb once. Tap Stop before using Read details on one bulb.")
         }
     }
 
@@ -85,7 +97,13 @@ struct QuboBulbsView: View {
                 }
             } else {
                 ForEach(manager.bulbs) { bulb in
-                    QuboBulbRow(bulb: bulb, preferences: preferences)
+                    QuboBulbRow(
+                        bulb: bulb,
+                        preferences: preferences,
+                        readIsDisabled: manager.isScanning || manager.hasActiveRead,
+                        onRead: { manager.readDetails(for: bulb.id) },
+                        onCancelRead: { manager.cancelRead(for: bulb.id) }
+                    )
                 }
             }
         }
@@ -147,7 +165,7 @@ struct QuboBulbsView: View {
     }
 
     private var recoveryStatusSection: some View {
-        Section("Automatic recovery") {
+        Section("Recovery status") {
             Label("Protocol capture needed", systemImage: "wave.3.right.circle")
                 .foregroundStyle(.orange)
             Text("The app can identify reset bulbs and keep your Wi-Fi details ready. It cannot safely reconnect a bulb yet because Qubo does not publish the Bluetooth provisioning frame or cloud-binding token.")
@@ -213,27 +231,37 @@ struct QuboBulbsView: View {
     private var scanDetail: String {
         switch manager.radioState {
         case .ready:
-            return manager.isScanning ? "Powered Qubo bulbs should appear within a few seconds." : "Tap refresh to start again."
+            return manager.isScanning ? "Each powered Qubo bulb will be added once." : "Tap Start scan when you want a new scan."
         case .unauthorized:
             return "Allow Bluetooth for Sapiod in iOS Settings."
         case .poweredOff:
-            return "Turn on Bluetooth, then tap refresh."
+            return "Turn on Bluetooth, then tap Start scan."
         case .unsupported:
             return "Use a real iPhone with Bluetooth Low Energy."
         case .failed(let message):
             return message
-        case .idle, .preparing:
+        case .idle:
+            return "Tap Start scan."
+        case .preparing:
             return "Waiting for iOS Bluetooth status."
         }
     }
 
+    private var scanIsUnavailable: Bool {
+        manager.radioState == .unauthorized || manager.radioState == .unsupported
+    }
+
     private var emptyStateDetail: String {
         switch manager.radioState {
-        case .ready: return "Keep this page open and make sure at least one bulb has wall power."
+        case .ready:
+            return manager.isScanning
+                ? "Keep this page open and make sure at least one bulb has wall power."
+                : "Tap Start scan when you want to look for powered bulbs."
         case .unauthorized: return "Bluetooth permission is required to find bulbs."
         case .poweredOff: return "Turn on Bluetooth to scan."
         case .unsupported: return "The iOS Simulator cannot scan physical bulbs."
-        default: return "Preparing the Bluetooth scanner."
+        case .idle: return "Tap Start scan when you want to look for powered bulbs."
+        case .preparing, .failed: return "Waiting for the Bluetooth scanner."
         }
     }
 }
@@ -241,6 +269,9 @@ struct QuboBulbsView: View {
 private struct QuboBulbRow: View {
     let bulb: QuboBulbSnapshot
     @ObservedObject var preferences: QuboPreferences
+    let readIsDisabled: Bool
+    let onRead: () -> Void
+    let onCancelRead: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -276,8 +307,20 @@ private struct QuboBulbRow: View {
                 .foregroundStyle(.secondary)
 
             if bulb.connectionPhase == .connecting || bulb.connectionPhase == .reading {
-                Label("Reading bulb details…", systemImage: "ellipsis")
-                    .font(.caption)
+                Button(role: .cancel, action: onCancelRead) {
+                    Label("Stop reading", systemImage: "stop.fill")
+                }
+                .buttonStyle(.bordered)
+            } else {
+                Button(action: onRead) {
+                    Label("Read details", systemImage: "doc.text.magnifyingglass")
+                }
+                .buttonStyle(.bordered)
+                .disabled(readIsDisabled)
+                Text(readIsDisabled
+                     ? "Stop the scan or current read first."
+                     : "Connects once, reads the current fields, then disconnects.")
+                    .font(.caption2)
                     .foregroundStyle(.secondary)
             }
 
