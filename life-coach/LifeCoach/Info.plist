@@ -22,6 +22,8 @@
 	<!-- ── Keys that were previously generated from INFOPLIST_KEY_* build settings ── -->
 	<key>CFBundleDisplayName</key>
 	<string>Sapiod</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Used to find and read the status of your nearby Qubo smart bulbs while the Bulbs page is open.</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
 	<string>Your coach reads your calendar to plan your day around real commitments and, if you allow it, writes its time blocks as events.</string>
 	<key>NSHealthShareUsageDescription</key>

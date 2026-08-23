@@ -48,6 +48,18 @@ pre-start reminder and an interactive end-of-block check-in per block. You answe
 record without opening the app, and the next session starts from that ground truth.
 Daily morning/evening pings and a Sunday weekly-review ping are standing.
 
+## Local utility: Qubo bulbs
+
+The **Bulbs** tab scans for powered Qubo HLB10 smart bulbs while the page is open. It reads
+their advertised hardware identity and vendor state over Bluetooth, keeps custom names by MAC,
+and stores an optional recovery Wi-Fi password in the device Keychain. The current state mapping
+is deliberately narrow: observed `S_01` bulbs need setup, observed `S_06` bulbs report a
+configured state, and other values remain unknown.
+
+Wi-Fi reprovisioning, Qubo cloud binding, and light controls are not enabled. Qubo does not
+publish those Bluetooth payloads, and an official-app pairing capture is required before the app
+can send them safely. Use a real iPhone; the simulator cannot scan physical bulbs.
+
 ## Setup
 
 1. Open `LifeCoach.xcodeproj` in **Xcode 16+**. Sources are folder-synced — new files
